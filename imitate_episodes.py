@@ -27,12 +27,13 @@ def main(args):
     # command line parameters
     is_eval = args['eval']
     ckpt_dir = args['ckpt_dir']
-    policy_class = args['policy_class']
+    policy_class = args['policy_class'] if 'policy_class' in args else 'ACT'
     onscreen_render = args['onscreen_render']
     task_name = args['task_name']
-    batch_size_train = args['batch_size']
-    batch_size_val = args['batch_size']
-    num_epochs = args['num_epochs']
+    batch_size_train = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
+    batch_size_val = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
+    num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
+    action_dim = args['action_dim'] if 'action_dim' in args else 14
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -49,7 +50,7 @@ def main(args):
 
     # fixed parameters
     # TODO change state_dim according to task
-    state_dim = ACTION_DIM
+    state_dim = action_dim
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':

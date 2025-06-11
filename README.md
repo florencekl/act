@@ -77,7 +77,7 @@ To train ACT:
     --num_epochs 2000  --lr 1e-5 \
     --seed 0
 
-    python3 imitate_episodes.py --task_name sim_vertebroplasty_simple \
+    CUDA_VISIBLE_DEVICES=1 python3 imitate_episodes.py --task_name sim_vertebroplasty_simple \
     --ckpt_dir /home/flora/projects/verteboplasty_imitation/external/data/sim_vertebroplasty_simple/act \
     --policy_class ACT \
     --kl_weight 10 \
