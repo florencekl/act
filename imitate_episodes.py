@@ -340,7 +340,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     min_val_loss = np.inf
     best_ckpt_info = None
     for epoch in tqdm(range(num_epochs)):
-        print(f'\nEpoch {epoch}')
+        # print(f'\nEpoch {epoch}')
         # validation
         with torch.inference_mode():
             policy.eval()
@@ -357,11 +357,11 @@ def train_bc(train_dataloader, val_dataloader, config):
             if epoch_val_loss < min_val_loss:
                 min_val_loss = epoch_val_loss
                 best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
-        print(f'Val loss:   {epoch_val_loss:.5f}')
+        # print(f'Val loss:   {epoch_val_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
-        print(summary_string)
+        # print(f"Summary_String: {summary_string}")
 
         # training
         policy.train()
@@ -376,11 +376,11 @@ def train_bc(train_dataloader, val_dataloader, config):
             train_history.append(detach_dict(forward_dict))
         epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary['loss']
-        print(f'Train loss: {epoch_train_loss:.5f}')
+        # print(f'Train loss: {epoch_train_loss:.5f}')
         summary_string = ''
         for k, v in epoch_summary.items():
             summary_string += f'{k}: {v.item():.3f} '
-        print(summary_string)
+        # print(summary_string)
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
