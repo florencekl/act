@@ -13,6 +13,8 @@ import numpy as np
 import IPython
 e = IPython.embed
 
+from constants import ACTION_DIM
+
 
 def reparametrize(mu, logvar):
     std = logvar.div(2).exp()
@@ -49,13 +51,15 @@ class DETRVAE(nn.Module):
         self.transformer = transformer
         self.encoder = encoder
         hidden_dim = transformer.d_model
+        # print(f"DETRVAE hidden dim {hidden_dim}")
         self.action_head = nn.Linear(hidden_dim, state_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         if backbones is not None:
+            # print(f"DETRVAE backbones {backbones[0].num_channels}")
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
-            self.input_proj_robot_state = nn.Linear(14, hidden_dim)
+            self.input_proj_robot_state = nn.Linear(ACTION_DIM, hidden_dim)
         else:
             # input_dim = 14 + 7 # robot_state + env_state
             self.input_proj_robot_state = nn.Linear(14, hidden_dim)
@@ -66,8 +70,8 @@ class DETRVAE(nn.Module):
         # encoder extra parameters
         self.latent_dim = 32 # final size of latent z # TODO tune
         self.cls_embed = nn.Embedding(1, hidden_dim) # extra cls token embedding
-        self.encoder_action_proj = nn.Linear(14, hidden_dim) # project action to embedding
-        self.encoder_joint_proj = nn.Linear(14, hidden_dim)  # project qpos to embedding
+        self.encoder_action_proj = nn.Linear(ACTION_DIM, hidden_dim) # project action to embedding
+        self.encoder_joint_proj = nn.Linear(ACTION_DIM, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
@@ -166,8 +170,8 @@ class CNNMLP(nn.Module):
                 backbone_down_projs.append(down_proj)
             self.backbone_down_projs = nn.ModuleList(backbone_down_projs)
 
-            mlp_in_dim = 768 * len(backbones) + 14
-            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=14, hidden_depth=2)
+            mlp_in_dim = 768 * len(backbones) + ACTION_DIM
+            self.mlp = mlp(input_dim=mlp_in_dim, hidden_dim=1024, output_dim=ACTION_DIM, hidden_depth=2)
         else:
             raise NotImplementedError
 
@@ -227,7 +231,7 @@ def build_encoder(args):
 
 
 def build(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = ACTION_DIM # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
@@ -255,7 +259,7 @@ def build(args):
     return model
 
 def build_cnnmlp(args):
-    state_dim = 14 # TODO hardcode
+    state_dim = ACTION_DIM # TODO hardcode
 
     # From state
     # backbone = None # from state for now, no need for conv nets
