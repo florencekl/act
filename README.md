@@ -89,6 +89,18 @@ To train ACT:
     --lr 1e-5 \
     --seed 0
 
+    CUDA_VISIBLE_DEVICES=1 python3 run_inference.py --task_name sim_vertebroplasty_simple \
+    --ckpt_dir /home/flora/projects/verteboplasty_imitation/external/data/sim_vertebroplasty_simple/act \
+    --policy_class ACT \
+    --kl_weight 10 \
+    --chunk_size 20 \
+    --hidden_dim 512 \
+    --batch_size 8 \
+    --dim_feedforward 3200 \
+    --num_epochs 2000  \
+    --lr 1e-5 \
+    --seed 0
+
     python3 imitate_episodes.py --task_name sim_test \
     --ckpt_dir /home/flora/projects/verteboplasty_imitation/external/data/insert_navigate_verteboplasty_simple/act \
     --policy_class ACT \

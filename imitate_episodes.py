@@ -8,6 +8,8 @@ from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
 
+import h5py
+
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
 from constants import ACTION_DIM
@@ -33,16 +35,13 @@ def main(args):
     batch_size_train = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
     batch_size_val = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
-    action_dim = args['action_dim'] if 'action_dim' in args else 14
+    action_dim = args['action_dim'] if 'action_dim' in args else 3
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
-    if is_sim:
-        from constants import SIM_TASK_CONFIGS
-        task_config = SIM_TASK_CONFIGS[task_name]
-    else:
-        from aloha_scripts.constants import TASK_CONFIGS
-        task_config = TASK_CONFIGS[task_name]
+    # we always wanna use our task configs in this repo, no outside dependencies
+    from constants import SIM_TASK_CONFIGS
+    task_config = SIM_TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
@@ -68,10 +67,11 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
+                         'action_dim': action_dim
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
-                         'camera_names': camera_names,}
+                         'camera_names': camera_names, 'action_dim': action_dim}
     else:
         raise NotImplementedError
 
@@ -151,6 +151,7 @@ def get_image(ts, camera_names):
     return curr_image
 
 
+
 def eval_bc(config, ckpt_name, save_episode=True):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
@@ -180,17 +181,6 @@ def eval_bc(config, ckpt_name, save_episode=True):
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
-    # load environment
-    if real_robot:
-        from aloha_scripts.robot_utils import move_grippers # requires aloha
-        from aloha_scripts.real_env import make_real_env # requires aloha
-        env = make_real_env(init_node=True)
-        env_max_reward = 0
-    else:
-        from sim_env import make_sim_env
-        env = make_sim_env(task_name)
-        env_max_reward = env.task.max_reward
-
     query_frequency = policy_config['num_queries']
     if temporal_agg:
         query_frequency = 1
@@ -198,24 +188,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
-    num_rollouts = 50
+    num_rollouts = 1
     episode_returns = []
     highest_rewards = []
     for rollout_id in range(num_rollouts):
         rollout_id += 0
-        ### set task
-        if 'sim_transfer_cube' in task_name:
-            BOX_POSE[0] = sample_box_pose() # used in sim reset
-        elif 'sim_insertion' in task_name:
-            BOX_POSE[0] = np.concatenate(sample_insertion_pose()) # used in sim reset
-
-        ts = env.reset()
-
-        ### onscreen render
-        if onscreen_render:
-            ax = plt.subplot()
-            plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
-            plt.ion()
 
         ### evaluation loop
         if temporal_agg:
@@ -226,30 +203,61 @@ def eval_bc(config, ckpt_name, save_episode=True):
         qpos_list = []
         target_qpos_list = []
         rewards = []
+        file = h5py.File("/home/flora/projects/verteboplasty_imitation/external/data/sim_vertebroplasty_simple/episode_1.hdf5", 'r')
+
         with torch.inference_mode():
             for t in range(max_timesteps):
-                ### update onscreen render and wait for DT
-                if onscreen_render:
-                    image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    plt_img.set_data(image)
-                    plt.pause(DT)
+                
 
-                ### process previous timestep to get qpos and image_list
-                obs = ts.observation
-                if 'images' in obs:
-                    image_list.append(obs['images'])
-                else:
-                    image_list.append({'main': obs['image']})
-                qpos_numpy = np.array(obs['qpos'])
-                qpos = pre_process(qpos_numpy)
+                original_action_shape = file['/action'].shape
+                episode_len = original_action_shape[0]
+
+                # get observation at start_ts only
+                qpos = file['/observations/qpos'][0]
+                qvel = file['/observations/qvel'][0]
+                image_dict = dict()
+                for cam_name in config['camera_names']:
+                    image_dict[cam_name] = file[f'/observations/images/{cam_name}'][0]
+                action = file['/action'][0:]
+                action_len = episode_len - 0
+                # else:
+                #     action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
+                #     action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
+
+                padded_action = np.zeros(original_action_shape, dtype=np.float32)
+                padded_action[:action_len] = action
+                is_pad = np.zeros(episode_len)
+                is_pad[action_len:] = 1
+
+                # new axis for different cameras
+                all_cam_images = []
+                for cam_name in config['camera_names']:
+                    all_cam_images.append(image_dict[cam_name])
+                all_cam_images = np.stack(all_cam_images, axis=0)
+
+                # construct observations
+                image_data = torch.from_numpy(all_cam_images)
+                qpos_data = torch.from_numpy(qpos).float().numpy()
+                action_data = torch.from_numpy(padded_action).float()
+                is_pad = torch.from_numpy(is_pad).bool()
+
+                # channel last
+                image_data = torch.einsum('k h w c -> k c h w', image_data)
+
+                # normalize image and change dtype to float
+                image_data = image_data / 255.0
+
+                image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
+
+                qpos = pre_process(qpos_data)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
-                curr_image = get_image(ts, camera_names)
 
+                print(image_data.shape, qpos.shape, action_data.shape, is_pad.shape)
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        all_actions = policy(qpos, image_data)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -263,7 +271,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                     else:
                         raw_action = all_actions[:, t % query_frequency]
                 elif config['policy_class'] == "CNNMLP":
-                    raw_action = policy(qpos, curr_image)
+                    raw_action = policy(qpos, image_data)
                 else:
                     raise NotImplementedError
 
@@ -272,48 +280,99 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 action = post_process(raw_action)
                 target_qpos = action
 
-                ### step the environment
-                ts = env.step(target_qpos)
+                print(f"t: {t}, target_qpos: {target_qpos}, qpos: {qpos_data}")
 
-                ### for visualization
-                qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
-                rewards.append(ts.reward)
 
-            plt.close()
-        if real_robot:
-            move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
-            pass
+        print(target_qpos_list)
+        import matplotlib.pyplot as plt
 
-        rewards = np.array(rewards)
-        episode_return = np.sum(rewards[rewards!=None])
-        episode_returns.append(episode_return)
-        episode_highest_reward = np.max(rewards)
-        highest_rewards.append(episode_highest_reward)
-        print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
+        from PIL import Image
 
-        if save_episode:
-            save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
+        # --- Visualization: Projected Predicted Qpos for All 3 Views ---
+        ap_imgs = np.array(file['observations/images/ap'])  # (N, H, W)
+        lateral_imgs = np.array(file['observations/images/lateral'])
+        barrel_imgs = np.array(file['observations/images/barrel'])
+        ap_proj = np.array(file['observations/ap_projection_matrix'])  # (3, 4)
+        lat_proj = np.array(file['observations/lateral_projection_matrix'])
+        bar_proj = np.array(file['observations/barrel_projection_matrix'])
 
-    success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
-    avg_return = np.mean(episode_returns)
-    summary_str = f'\nSuccess rate: {success_rate}\nAverage return: {avg_return}\n\n'
-    for r in range(env_max_reward+1):
-        more_or_equal_r = (np.array(highest_rewards) >= r).sum()
-        more_or_equal_r_rate = more_or_equal_r / num_rollouts
-        summary_str += f'Reward >= {r}: {more_or_equal_r}/{num_rollouts} = {more_or_equal_r_rate*100}%\n'
+        def project_point(P, point3d):
+            point_h = np.append(point3d, 1)
+            proj = P @ point_h
+            x = proj[0] / proj[2]
+            y = proj[1] / proj[2]
+            return x, y
 
-    print(summary_str)
+        # --- Visualization: Overlay Predicted and Actual Qpos for All 3 Views ---
+        actual_qpos = np.array(file['observations/qpos'])  # (N, 3)
+        imgs = [ap_imgs[0], lateral_imgs[0], barrel_imgs[0]]
+        projs = [ap_proj, lat_proj, bar_proj]
+        view_names = ["ap", "lateral", "barrel"]
 
-    # save success rate to txt
-    result_file_name = 'result_' + ckpt_name.split('.')[0] + '.txt'
-    with open(os.path.join(ckpt_dir, result_file_name), 'w') as f:
-        f.write(summary_str)
-        f.write(repr(episode_returns))
-        f.write('\n\n')
-        f.write(repr(highest_rewards))
+        fig, axs = plt.subplots(1, 3, figsize=(19, 6))
+        for ax, img, P, name in zip(axs, imgs, projs, view_names):
+            if img.dtype != np.uint8:
+                img = (255 * (img - img.min()) / (img.ptp() + 1e-8)).astype(np.uint8)
+            ax.imshow(img, cmap='gray')
+            # Plot predicted qpos
+            pred_xs, pred_ys = [], []
+            for pt in target_qpos_list:
+                x, y = project_point(P, pt)
+                pred_xs.append(x)
+                pred_ys.append(y)
+            ax.plot(pred_xs, pred_ys, 'rx', markersize=8, markeredgewidth=2, label='Predicted qpos', alpha=0.7)
+            # Plot actual qpos
+            act_xs, act_ys = [], []
+            for pt in actual_qpos:
+                x, y = project_point(P, pt)
+                act_xs.append(x)
+                act_ys.append(y)
+            ax.plot(act_xs, act_ys, 'bx', markersize=8, markeredgewidth=2, label='Actual qpos', alpha=0.7)
+            ax.set_title(f"{name.upper()} View")
+            ax.axis('off')
+            ax.legend(loc='lower right')
+        plt.tight_layout()
+        plt.savefig(os.path.join(ckpt_dir, f'projected_pred_vs_actual_qpos_{rollout_id}.png'))
+        plt.close()
+        print(f"Saved projected_pred_vs_actual_qpos for rollout {rollout_id}")
 
-    return success_rate, avg_return
+    return 0, 0
+
+    #         plt.close()
+    #     if real_robot:
+    #         move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
+    #         pass
+
+    #     rewards = np.array(rewards)
+    #     episode_return = np.sum(rewards[rewards!=None])
+    #     episode_returns.append(episode_return)
+    #     episode_highest_reward = np.max(rewards)
+    #     highest_rewards.append(episode_highest_reward)
+    #     print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
+
+    #     if save_episode:
+    #         save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
+
+    # success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
+    # avg_return = np.mean(episode_returns)
+    # summary_str = f'\nSuccess rate: {success_rate}\nAverage return: {avg_return}\n\n'
+    # for r in range(env_max_reward+1):
+    #     more_or_equal_r = (np.array(highest_rewards) >= r).sum()
+    #     more_or_equal_r_rate = more_or_equal_r / num_rollouts
+    #     summary_str += f'Reward >= {r}: {more_or_equal_r}/{num_rollouts} = {more_or_equal_r_rate*100}%\n'
+
+    # print(summary_str)
+
+    # # save success rate to txt
+    # result_file_name = 'result_' + ckpt_name.split('.')[0] + '.txt'
+    # with open(os.path.join(ckpt_dir, result_file_name), 'w') as f:
+    #     f.write(summary_str)
+    #     f.write(repr(episode_returns))
+    #     f.write('\n\n')
+    #     f.write(repr(highest_rewards))
+
+    # return success_rate, avg_return
 
 
 def forward_pass(data, policy):

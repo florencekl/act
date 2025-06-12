@@ -13,9 +13,6 @@ import numpy as np
 import IPython
 e = IPython.embed
 
-from main import ACTION_DIM
-
-
 def reparametrize(mu, logvar):
     std = logvar.div(2).exp()
     eps = Variable(std.data.new(std.size()).normal_())

@@ -20,6 +20,7 @@ class ACTPolicy(nn.Module):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
         image = normalize(image)
+        print(image.shape, qpos.shape, actions.shape if actions is not None else None, is_pad.shape if is_pad is not None else None)
         if actions is not None: # training time
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
