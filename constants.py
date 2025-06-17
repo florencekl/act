@@ -1,12 +1,12 @@
 import pathlib
 
 ### Task parameters
-DATA_DIR = '/home/flora/projects/verteboplasty_imitation/external/data'
+DATA_DIR = '/data2/flora'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
         'dataset_dir': DATA_DIR + '/sim_vertebroplasty_simple',
-        'num_episodes': 1000,
-        'episode_len': 22,
+        'num_episodes': 1500,
+        'episode_len': 50,
         'camera_names': ['ap', 'lateral']
     },
     'sim_test': {

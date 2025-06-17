@@ -35,7 +35,7 @@ def main(args):
     batch_size_train = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
     batch_size_val = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
-    action_dim = args['action_dim'] if 'action_dim' in args else 3
+    action_dim = args['action_dim'] if 'action_dim' in args else 6
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -378,7 +378,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    # print(f'Forward pass with {qpos_data.shape}, {image_data.shape}, {action_data.shape}, {is_pad.shape}')
+    print(f'Forward pass with {qpos_data.shape}, {image_data.shape}, {action_data.shape}, {is_pad.shape}')
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
 
@@ -491,10 +491,11 @@ if __name__ == '__main__':
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
 
     # for ACT
-    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    # parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
+    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
     
     main(vars(parser.parse_args()))

@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import torchvision.transforms as transforms
@@ -17,8 +18,12 @@ class ACTPolicy(nn.Module):
 
     def __call__(self, qpos, image, actions=None, is_pad=None):
         env_state = None
+        # rgb = image[:, :, :3, ...]
+        # heatmap = image[:, :, 3:, ...]  # keep as is
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225])
+                                        std=[0.229, 0.224, 0.225])
+        # rgb = normalize(rgb)
+        # image = torch.cat([rgb, heatmap], dim=2)
         image = normalize(image)
         print(image.shape, qpos.shape, actions.shape if actions is not None else None, is_pad.shape if is_pad is not None else None)
         if actions is not None: # training time

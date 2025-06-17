@@ -37,8 +37,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
             image_dict = dict()
+            # heatmap_dict = dict()
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
+                # Load heatmap for this camera (only once, not per timestep)
+                # heatmap_dict[cam_name] = np.array(root[f'/observations/heatmaps/{cam_name}'])
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
@@ -56,6 +59,14 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # new axis for different cameras
         all_cam_images = []
         for cam_name in self.camera_names:
+            # img = image_dict[cam_name]
+            # heatmap = heatmap_dict[cam_name]
+            # # Ensure heatmap has shape (H, W), add channel dim
+            # if heatmap.ndim == 2:
+            #     heatmap = heatmap[..., None]  # (H, W, 1)
+            # # Concatenate along channel axis (last axis)
+            # img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
+            # all_cam_images.append(img_with_heatmap)
             all_cam_images.append(image_dict[cam_name])
         all_cam_images = np.stack(all_cam_images, axis=0)
 
@@ -65,7 +76,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
 
-        # channel last
+        # channel last -> channel first
         image_data = torch.einsum('k h w c -> k c h w', image_data)
 
         # normalize image and change dtype to float

@@ -119,6 +119,7 @@ class DETRVAE(nn.Module):
             all_cam_features = []
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
+                print(f"Shape of image[:, cam_id]: {image[:, cam_id].shape}")
                 features, pos = self.backbones[0](image[:, cam_id]) # HARDCODED
                 features = features[0] # take the last layer feature
                 pos = pos[0]
