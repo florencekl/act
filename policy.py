@@ -25,7 +25,7 @@ class ACTPolicy(nn.Module):
         # rgb = normalize(rgb)
         # image = torch.cat([rgb, heatmap], dim=2)
         image = normalize(image)
-        print(image.shape, qpos.shape, actions.shape if actions is not None else None, is_pad.shape if is_pad is not None else None)
+        # print(image.shape, qpos.shape, actions.shape if actions is not None else None, is_pad.shape if is_pad is not None else None)
         if actions is not None: # training time
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]

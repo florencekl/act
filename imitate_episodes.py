@@ -91,6 +91,7 @@ def main(args):
         'real_robot': not is_sim
     }
 
+    print(is_eval)
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         results = []
@@ -203,8 +204,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
         qpos_list = []
         target_qpos_list = []
         rewards = []
-        file = h5py.File("/home/flora/projects/verteboplasty_imitation/external/data/sim_vertebroplasty_simple/episode_1.hdf5", 'r')
+        file = h5py.File("/data2/flora/sim_vertebroplasty_simple/episode_1.hdf5", 'r')
 
+        print(max_timesteps)
+
+        current_timestep = 0
         with torch.inference_mode():
             for t in range(max_timesteps):
                 
@@ -213,11 +217,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 episode_len = original_action_shape[0]
 
                 # get observation at start_ts only
-                qpos = file['/observations/qpos'][0]
-                qvel = file['/observations/qvel'][0]
+                qpos = file['/observations/qpos'][current_timestep]
+                qvel = file['/observations/qvel'][current_timestep]
                 image_dict = dict()
                 for cam_name in config['camera_names']:
-                    image_dict[cam_name] = file[f'/observations/images/{cam_name}'][0]
+                    image_dict[cam_name] = file[f'/observations/images/{cam_name}'][current_timestep]
                 action = file['/action'][0:]
                 action_len = episode_len - 0
                 # else:
@@ -253,7 +257,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
 
-                print(image_data.shape, qpos.shape, action_data.shape, is_pad.shape)
+                # print(image_data.shape, qpos.shape, action_data.shape, is_pad.shape)
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
@@ -284,7 +288,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
                 target_qpos_list.append(target_qpos)
 
-        print(target_qpos_list)
+        print(len(target_qpos_list))
         import matplotlib.pyplot as plt
 
         from PIL import Image
@@ -292,10 +296,10 @@ def eval_bc(config, ckpt_name, save_episode=True):
         # --- Visualization: Projected Predicted Qpos for All 3 Views ---
         ap_imgs = np.array(file['observations/images/ap'])  # (N, H, W)
         lateral_imgs = np.array(file['observations/images/lateral'])
-        barrel_imgs = np.array(file['observations/images/barrel'])
-        ap_proj = np.array(file['observations/ap_projection_matrix'])  # (3, 4)
-        lat_proj = np.array(file['observations/lateral_projection_matrix'])
-        bar_proj = np.array(file['observations/barrel_projection_matrix'])
+        # barrel_imgs = np.array(file['observations/images/barrel'])
+        ap_proj = np.array(file['observations/projection_matrices/ap'])  # (3, 4)
+        lat_proj = np.array(file['observations/projection_matrices/lateral'])
+        # bar_proj = np.array(file['observations/barrel_projection_matrix'])
 
         def project_point(P, point3d):
             point_h = np.append(point3d, 1)
@@ -305,27 +309,29 @@ def eval_bc(config, ckpt_name, save_episode=True):
             return x, y
 
         # --- Visualization: Overlay Predicted and Actual Qpos for All 3 Views ---
-        actual_qpos = np.array(file['observations/qpos'])  # (N, 3)
-        imgs = [ap_imgs[0], lateral_imgs[0], barrel_imgs[0]]
-        projs = [ap_proj, lat_proj, bar_proj]
-        view_names = ["ap", "lateral", "barrel"]
+        actual_qpos = np.array(file['observations/qpos'])[current_timestep:]  # (N, 3)
+        imgs = [ap_imgs[current_timestep], lateral_imgs[current_timestep]]
+        projs = [ap_proj, lat_proj]
+        view_names = ["ap", "lateral"]
 
-        fig, axs = plt.subplots(1, 3, figsize=(19, 6))
+        fig, axs = plt.subplots(1, 2, figsize=(12, 6))
         for ax, img, P, name in zip(axs, imgs, projs, view_names):
             if img.dtype != np.uint8:
                 img = (255 * (img - img.min()) / (img.ptp() + 1e-8)).astype(np.uint8)
             ax.imshow(img, cmap='gray')
             # Plot predicted qpos
             pred_xs, pred_ys = [], []
+            print(np.shape(target_qpos_list))
             for pt in target_qpos_list:
-                x, y = project_point(P, pt)
+                x, y = project_point(P, pt[:3])
                 pred_xs.append(x)
                 pred_ys.append(y)
             ax.plot(pred_xs, pred_ys, 'rx', markersize=8, markeredgewidth=2, label='Predicted qpos', alpha=0.7)
             # Plot actual qpos
             act_xs, act_ys = [], []
+            print(np.shape(actual_qpos))
             for pt in actual_qpos:
-                x, y = project_point(P, pt)
+                x, y = project_point(P, pt[:3])
                 act_xs.append(x)
                 act_ys.append(y)
             ax.plot(act_xs, act_ys, 'bx', markersize=8, markeredgewidth=2, label='Actual qpos', alpha=0.7)
@@ -378,7 +384,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    print(f'Forward pass with {qpos_data.shape}, {image_data.shape}, {action_data.shape}, {is_pad.shape}')
+    # print(f'Forward pass with {qpos_data.shape}, {image_data.shape}, {action_data.shape}, {is_pad.shape}')
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
 
@@ -475,6 +481,7 @@ def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
         plt.legend()
         plt.title(key)
         plt.savefig(plot_path)
+        plt.close()
     print(f'Saved plots to {ckpt_dir}')
 
 
