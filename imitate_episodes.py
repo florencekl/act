@@ -1,3 +1,6 @@
+from deepdrr import LineAnnotation
+from deepdrr import geo
+import killeengeo as kg
 import torch
 import numpy as np
 import os
@@ -21,6 +24,8 @@ from visualize_episodes import save_videos
 
 from sim_env import BOX_POSE
 
+from deepdrr_simulation_platform import load_config, SimulationEnvironment
+
 import IPython
 e = IPython.embed
 
@@ -35,7 +40,7 @@ def main(args):
     batch_size_train = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
     batch_size_val = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
-    action_dim = args['action_dim'] if 'action_dim' in args else 6
+    action_dim = args['action_dim'] if 'action_dim' in args else 9
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -179,6 +184,46 @@ def eval_bc(config, ckpt_name, save_episode=True):
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
 
+    ### --- SETUP SIMULATION ENVIRONMENT --- ###
+    file = h5py.File("/data2/flora/sim_vertebroplasty_simple/episode_2100.hdf5", 'r')
+    
+    # Load metadata
+    case = file.attrs['case']
+    phantoms_dir = file.attrs['phantoms_dir'] 
+    qpos_h5data = file['observations/qpos'][:]
+    
+    # Load annotation data
+    start_point = file['annotations/start'][:]
+    end_point = file['annotations/end'][:]
+    world_from_anatomical = file['world_from_anatomical'][:]
+    
+    print(f"Case: {case}")
+    print(f"Frames: {len(qpos_data)}")
+    print(f"QPos shape: {qpos_data.shape}")
+    
+    # Setup environment
+    cfg = load_config("/home/flora/projects/verteboplasty_imitation/deepdrr_simulation_platform/config.yaml")
+    env = SimulationEnvironment(cfg)
+    
+    # Load phantom and tools
+    phantom_path = os.path.join(phantoms_dir, case)
+    print(f"Loading phantom from: {phantom_path}")
+    ct = env.load_phantom(phantom_path)
+    tools = env.load_tools()
+    env.initialize_projector()
+    
+    # Create annotation object
+    annotation = LineAnnotation(
+        startpoint=geo.point(start_point),
+        endpoint=geo.point(end_point),
+        volume=ct,
+        world_from_anatomical=ct.world_from_anatomical,
+        anatomical_coordinate_system=ct.anatomical_coordinate_system
+    )
+    
+    # Generate camera views
+    ap_view, lateral_view = env.generate_views(annotation)
+
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
@@ -190,8 +235,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
     num_rollouts = 1
-    episode_returns = []
-    highest_rewards = []
+    lateral_images = []
+    ap_images = []
     for rollout_id in range(num_rollouts):
         rollout_id += 0
 
@@ -200,28 +245,19 @@ def eval_bc(config, ckpt_name, save_episode=True):
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-        image_list = [] # for visualization
-        qpos_list = []
         target_qpos_list = []
-        rewards = []
-        file = h5py.File("/data2/flora/sim_vertebroplasty_simple/episode_1.hdf5", 'r')
 
-        print(max_timesteps)
-
-        current_timestep = 0
         with torch.inference_mode():
-            for t in range(max_timesteps):
-                
+            # get observation at start_ts only
+            cur_qpos = qpos_h5data[0]
+            image_dict = dict()
+            for cam_name in config['camera_names']:
+                image_dict[cam_name] = file[f'/observations/images/{cam_name}'][0]
 
+            for t in range(max_timesteps):
                 original_action_shape = file['/action'].shape
                 episode_len = original_action_shape[0]
 
-                # get observation at start_ts only
-                qpos = file['/observations/qpos'][current_timestep]
-                qvel = file['/observations/qvel'][current_timestep]
-                image_dict = dict()
-                for cam_name in config['camera_names']:
-                    image_dict[cam_name] = file[f'/observations/images/{cam_name}'][current_timestep]
                 action = file['/action'][0:]
                 action_len = episode_len - 0
                 # else:
@@ -241,8 +277,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
                 # construct observations
                 image_data = torch.from_numpy(all_cam_images)
-                qpos_data = torch.from_numpy(qpos).float().numpy()
-                action_data = torch.from_numpy(padded_action).float()
+                qpos_data = torch.from_numpy(cur_qpos).float().numpy()
                 is_pad = torch.from_numpy(is_pad).bool()
 
                 # channel last
@@ -284,101 +319,81 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 action = post_process(raw_action)
                 target_qpos = action
 
-                print(f"t: {t}, target_qpos: {target_qpos}, qpos: {qpos_data}")
+                ap_image = env.render_tools(
+                    tool_poses={
+                        "cannula": (kg.point(target_qpos[:3]), kg.point(target_qpos[6:9])),
+                        "linear_drive": (kg.point(target_qpos[3:6]), kg.point(target_qpos[6:9])),
+                    },
+                    view=ap_view
+                )
+                ap_processed = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
+                ap_images.append(ap_processed)
+                
+                # Generate lateral image  
+                lateral_image = env.render_tools(
+                    tool_poses={
+                        "cannula": (kg.point(target_qpos[:3]), kg.point(target_qpos[6:9])),
+                        "linear_drive": (kg.point(target_qpos[3:6]), kg.point(target_qpos[6:9])),
+                    },
+                    view=lateral_view
+                )
+                lateral_processed = image_utils.process_drr(lateral_image, neglog=False, invert=False)
+                lateral_images.append(lateral_processed)
 
-                target_qpos_list.append(target_qpos)
+                env.render_tools
 
-        print(len(target_qpos_list))
-        import matplotlib.pyplot as plt
+                from deepdrr.utils import image_utils
+                image_dict['ap'] = ap_processed
+                image_dict['lateral'] = lateral_processed
 
-        from PIL import Image
+                qpos = target_qpos
 
-        # --- Visualization: Projected Predicted Qpos for All 3 Views ---
-        ap_imgs = np.array(file['observations/images/ap'])  # (N, H, W)
-        lateral_imgs = np.array(file['observations/images/lateral'])
-        # barrel_imgs = np.array(file['observations/images/barrel'])
-        ap_proj = np.array(file['observations/projection_matrices/ap'])  # (3, 4)
-        lat_proj = np.array(file['observations/projection_matrices/lateral'])
-        # bar_proj = np.array(file['observations/barrel_projection_matrix'])
-
-        def project_point(P, point3d):
-            point_h = np.append(point3d, 1)
-            proj = P @ point_h
-            x = proj[0] / proj[2]
-            y = proj[1] / proj[2]
-            return x, y
-
-        # --- Visualization: Overlay Predicted and Actual Qpos for All 3 Views ---
-        actual_qpos = np.array(file['observations/qpos'])[current_timestep:]  # (N, 3)
-        imgs = [ap_imgs[current_timestep], lateral_imgs[current_timestep]]
-        projs = [ap_proj, lat_proj]
-        view_names = ["ap", "lateral"]
-
-        fig, axs = plt.subplots(1, 2, figsize=(12, 6))
-        for ax, img, P, name in zip(axs, imgs, projs, view_names):
-            if img.dtype != np.uint8:
-                img = (255 * (img - img.min()) / (img.ptp() + 1e-8)).astype(np.uint8)
-            ax.imshow(img, cmap='gray')
-            # Plot predicted qpos
-            pred_xs, pred_ys = [], []
-            print(np.shape(target_qpos_list))
-            for pt in target_qpos_list:
-                x, y = project_point(P, pt[:3])
-                pred_xs.append(x)
-                pred_ys.append(y)
-            ax.plot(pred_xs, pred_ys, 'rx', markersize=8, markeredgewidth=2, label='Predicted qpos', alpha=0.7)
-            # Plot actual qpos
-            act_xs, act_ys = [], []
-            print(np.shape(actual_qpos))
-            for pt in actual_qpos:
-                x, y = project_point(P, pt[:3])
-                act_xs.append(x)
-                act_ys.append(y)
-            ax.plot(act_xs, act_ys, 'bx', markersize=8, markeredgewidth=2, label='Actual qpos', alpha=0.7)
-            ax.set_title(f"{name.upper()} View")
-            ax.axis('off')
-            ax.legend(loc='lower right')
-        plt.tight_layout()
-        plt.savefig(os.path.join(ckpt_dir, f'projected_pred_vs_actual_qpos_{rollout_id}.png'))
-        plt.close()
-        print(f"Saved projected_pred_vs_actual_qpos for rollout {rollout_id}")
+    # Convert to numpy arrays
+    ap_images = np.array(ap_images)
+    lateral_images = np.array(lateral_images)
+    
+    print(f"Generated {len(ap_images)} images")
+    print(f"AP image shape: {ap_images.shape}")
+    print(f"Lateral image shape: {lateral_images.shape}")
+    
+    output_file = os.path.join(config['ckpt_dir'], f'{task_name}_eval.hdf5')
+    # Save new HDF5 file
+    print(f"Saving to: {output_file}")
+    
+    with h5py.File(output_file, 'w') as new_f:
+        # Copy all original attributes
+        for key in file.attrs.keys():
+            new_f.attrs[key] = file.attrs[key]
+        
+        # Mark as regenerated
+        new_f.attrs['regenerated'] = True
+        
+        # Copy datasets
+        new_f.create_dataset("world_from_anatomical", data=file['world_from_anatomical'][:])
+        new_f.create_dataset("action", data=file['action'][:])
+        
+        # Copy annotations
+        anno_grp = new_f.create_group("annotations")
+        anno_grp.create_dataset("start", data=file['annotations/start'][:])
+        anno_grp.create_dataset("end", data=file['annotations/end'][:])
+        
+        # Copy observations
+        obs_grp = new_f.create_group("observations")
+        obs_grp.create_dataset("qpos", data=np.array(qpos_history.cpu()))
+        obs_grp.create_dataset("qvel", data=file['observations/qvel'][:])
+        
+        # Add projection matrices
+        proj_grp = obs_grp.create_group("projection_matrices")
+        projection = env.device.get_camera_projection()
+        proj_grp.create_dataset("ap", data=np.array(projection))
+        proj_grp.create_dataset("lateral", data=np.array(projection))
+        
+        # Add regenerated images
+        imgs_grp = obs_grp.create_group("images")
+        imgs_grp.create_dataset("ap", data=ap_images)
+        imgs_grp.create_dataset("lateral", data=lateral_images)
 
     return 0, 0
-
-    #         plt.close()
-    #     if real_robot:
-    #         move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
-    #         pass
-
-    #     rewards = np.array(rewards)
-    #     episode_return = np.sum(rewards[rewards!=None])
-    #     episode_returns.append(episode_return)
-    #     episode_highest_reward = np.max(rewards)
-    #     highest_rewards.append(episode_highest_reward)
-    #     print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
-
-    #     if save_episode:
-    #         save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
-
-    # success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
-    # avg_return = np.mean(episode_returns)
-    # summary_str = f'\nSuccess rate: {success_rate}\nAverage return: {avg_return}\n\n'
-    # for r in range(env_max_reward+1):
-    #     more_or_equal_r = (np.array(highest_rewards) >= r).sum()
-    #     more_or_equal_r_rate = more_or_equal_r / num_rollouts
-    #     summary_str += f'Reward >= {r}: {more_or_equal_r}/{num_rollouts} = {more_or_equal_r_rate*100}%\n'
-
-    # print(summary_str)
-
-    # # save success rate to txt
-    # result_file_name = 'result_' + ckpt_name.split('.')[0] + '.txt'
-    # with open(os.path.join(ckpt_dir, result_file_name), 'w') as f:
-    #     f.write(summary_str)
-    #     f.write(repr(episode_returns))
-    #     f.write('\n\n')
-    #     f.write(repr(highest_rewards))
-
-    # return success_rate, avg_return
 
 
 def forward_pass(data, policy):
