@@ -1,5 +1,5 @@
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
@@ -188,7 +188,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     ### --- SETUP SIMULATION ENVIRONMENT --- ###
-    file = h5py.File("/data2/flora/vertebroplasty_imitation/episode_850.hdf5", 'r')
+    file = h5py.File("/data2/flora/vertebroplasty_imitation_0/episode_190.hdf5", 'r')
     
     # Load metadata
     case = file.attrs['case']
@@ -212,16 +212,18 @@ def eval_bc(config, ckpt_name, save_episode=True):
     phantom_path = os.path.join(phantoms_dir, case)
     print(f"Loading phantom from: {phantom_path}")
     ct = env.load_phantom(phantom_path)
+    print(f"Loading tools for case: {case}")
     tools = env.load_tools()
+    print(f"Initializing projector")
     env.initialize_projector()
     
     # Create annotation object
     annotation = LineAnnotation(
         startpoint=geo.point(start_point[:3]),
         endpoint=geo.point(end_point[:3]),
-        # volume=ct,
-        # world_from_anatomical=ct.world_from_anatomical,
-        world_from_anatomical=kg.FrameTransform.identity(),
+        volume=ct,
+        world_from_anatomical=ct.world_from_anatomical,
+        # world_from_anatomical=kg.FrameTransform.identity(),
         anatomical_coordinate_system=ct.anatomical_coordinate_system
     )
     
@@ -238,12 +240,12 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
 
-    num_rollouts = 1
-    lateral_images = []
-    ap_images = []
-    qpos_history = []
+    num_rollouts = 5
     for rollout_id in range(num_rollouts):
         rollout_id += 0
+        lateral_images = []
+        ap_images = []
+        qpos_history = []
 
         ### evaluation loop
         if temporal_agg:
@@ -251,7 +253,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
 
-        starting_timestep = 20
+        starting_timestep = rollout_id * 20
         # max_timesteps = max_timesteps - starting_timestep
         with torch.inference_mode():
             # get observation at start_ts only
@@ -342,55 +344,55 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
                 qpos_history.append(qpos)
 
-    # Convert to numpy arrays
-    ap_images = np.array(ap_images)
-    print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
-    lateral_images = np.array(lateral_images)
-    print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
-    
-    print(f"Generated {len(ap_images)} images")
-    print(f"AP image shape: {ap_images.shape}")
-    print(f"Lateral image shape: {lateral_images.shape}")
-    
-    output_file = os.path.join(config['ckpt_dir'], f'{task_name}_eval_start_{starting_timestep}.hdf5')
-    # Save new HDF5 file
-    print(f"Saving to: {output_file}")
-    
-    with h5py.File(output_file, 'w') as new_f:
-        # Copy all original attributes
-        for key in file.attrs.keys():
-            new_f.attrs[key] = file.attrs[key]
+        # Convert to numpy arrays
+        ap_images = np.array(ap_images)
+        print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
+        lateral_images = np.array(lateral_images)
+        print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
         
-        # Mark as regenerated
-        new_f.attrs['regenerated'] = True
+        print(f"Generated {len(ap_images)} images")
+        print(f"AP image shape: {ap_images.shape}")
+        print(f"Lateral image shape: {lateral_images.shape}")
         
-        qpos = np.array(qpos_history)
-        qvel = np.vstack(([0, 0, 0, 0, 0, 0, 0, 0, 0], np.diff(qpos, axis=0)))
-        qvel = qvel.tolist()
+        output_file = os.path.join(config['ckpt_dir'], f'{task_name}_eval_start_{starting_timestep}.hdf5')
+        # Save new HDF5 file
+        print(f"Saving to: {output_file}")
+        
+        with h5py.File(output_file, 'w') as new_f:
+            # Copy all original attributes
+            for key in file.attrs.keys():
+                new_f.attrs[key] = file.attrs[key]
+            
+            # Mark as regenerated
+            new_f.attrs['regenerated'] = True
+            
+            qpos = np.array(qpos_history)
+            qvel = np.vstack(([0, 0, 0, 0, 0, 0, 0, 0, 0], np.diff(qpos, axis=0)))
+            qvel = qvel.tolist()
 
-        # Copy datasets
-        new_f.create_dataset("world_from_anatomical", data=file['world_from_anatomical'][:])
-        
-        # Copy observations
-        new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
-        obs_grp = new_f.create_group("observations")
-        obs_grp.create_dataset("qpos", data=np.array(qpos, dtype=np.float32))
-        obs_grp.create_dataset("qvel", data=np.array(qvel, dtype=np.float32))
-        
-        # Copy annotations
-        anno_grp = new_f.create_group("annotations")
-        anno_grp.create_dataset("start", data=np.array(annotation.startpoint_in_world.tolist()))
-        anno_grp.create_dataset("end", data=np.array(annotation.endpoint_in_world.tolist()))
-        
-        # Add projection matrices
-        proj_grp = obs_grp.create_group("projection_matrices")
-        proj_grp.create_dataset("ap", data=np.array(file['observations/projection_matrices/ap']))
-        proj_grp.create_dataset("lateral", data=np.array(file['observations/projection_matrices/lateral']))
-        
-        # Add regenerated images
-        imgs_grp = obs_grp.create_group("images")
-        imgs_grp.create_dataset("ap", data=ap_images)
-        imgs_grp.create_dataset("lateral", data=lateral_images)
+            # Copy datasets
+            new_f.create_dataset("world_from_anatomical", data=file['world_from_anatomical'][:])
+            
+            # Copy observations
+            new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
+            obs_grp = new_f.create_group("observations")
+            obs_grp.create_dataset("qpos", data=np.array(qpos, dtype=np.float32))
+            obs_grp.create_dataset("qvel", data=np.array(qvel, dtype=np.float32))
+            
+            # Copy annotations
+            anno_grp = new_f.create_group("annotations")
+            anno_grp.create_dataset("start", data=np.array(annotation.startpoint_in_world.tolist()))
+            anno_grp.create_dataset("end", data=np.array(annotation.endpoint_in_world.tolist()))
+            
+            # Add projection matrices
+            proj_grp = obs_grp.create_group("projection_matrices")
+            proj_grp.create_dataset("ap", data=np.array(file['observations/projection_matrices/ap']))
+            proj_grp.create_dataset("lateral", data=np.array(file['observations/projection_matrices/lateral']))
+            
+            # Add regenerated images
+            imgs_grp = obs_grp.create_group("images")
+            imgs_grp.create_dataset("ap", data=ap_images)
+            imgs_grp.create_dataset("lateral", data=lateral_images)
 
     return 0, 0
 
