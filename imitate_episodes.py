@@ -1,9 +1,10 @@
+import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
 import torch
 import numpy as np
-import os
 import pickle
 import argparse
 import matplotlib.pyplot as plt
@@ -25,6 +26,7 @@ from visualize_episodes import save_videos
 from sim_env import BOX_POSE
 
 from deepdrr_simulation_platform import load_config, SimulationEnvironment
+from deepdrr.utils import image_utils
 
 import IPython
 e = IPython.embed
@@ -99,6 +101,7 @@ def main(args):
     print(is_eval)
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
+        # ckpt_names = [f'policy_epoch_300_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
@@ -185,7 +188,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     ### --- SETUP SIMULATION ENVIRONMENT --- ###
-    file = h5py.File("/data2/flora/sim_vertebroplasty_simple/episode_2100.hdf5", 'r')
+    file = h5py.File("/data2/flora/vertebroplasty_imitation/episode_850.hdf5", 'r')
     
     # Load metadata
     case = file.attrs['case']
@@ -198,8 +201,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     world_from_anatomical = file['world_from_anatomical'][:]
     
     print(f"Case: {case}")
-    print(f"Frames: {len(qpos_data)}")
-    print(f"QPos shape: {qpos_data.shape}")
+    print(f"Frames: {len(qpos_h5data)}")
+    print(f"QPos shape: {qpos_h5data.shape}")
     
     # Setup environment
     cfg = load_config("/home/flora/projects/verteboplasty_imitation/deepdrr_simulation_platform/config.yaml")
@@ -214,10 +217,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
     
     # Create annotation object
     annotation = LineAnnotation(
-        startpoint=geo.point(start_point),
-        endpoint=geo.point(end_point),
-        volume=ct,
-        world_from_anatomical=ct.world_from_anatomical,
+        startpoint=geo.point(start_point[:3]),
+        endpoint=geo.point(end_point[:3]),
+        # volume=ct,
+        # world_from_anatomical=ct.world_from_anatomical,
+        world_from_anatomical=kg.FrameTransform.identity(),
         anatomical_coordinate_system=ct.anatomical_coordinate_system
     )
     
@@ -237,6 +241,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     num_rollouts = 1
     lateral_images = []
     ap_images = []
+    qpos_history = []
     for rollout_id in range(num_rollouts):
         rollout_id += 0
 
@@ -244,31 +249,20 @@ def eval_bc(config, ckpt_name, save_episode=True):
         if temporal_agg:
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
-        qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-        target_qpos_list = []
+        # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
 
+        starting_timestep = 20
+        # max_timesteps = max_timesteps - starting_timestep
         with torch.inference_mode():
             # get observation at start_ts only
-            cur_qpos = qpos_h5data[0]
             image_dict = dict()
             for cam_name in config['camera_names']:
-                image_dict[cam_name] = file[f'/observations/images/{cam_name}'][0]
+                image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
+                print(np.shape(image_dict[cam_name]), np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
+            
+            qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
 
             for t in range(max_timesteps):
-                original_action_shape = file['/action'].shape
-                episode_len = original_action_shape[0]
-
-                action = file['/action'][0:]
-                action_len = episode_len - 0
-                # else:
-                #     action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
-                #     action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
-
-                padded_action = np.zeros(original_action_shape, dtype=np.float32)
-                padded_action[:action_len] = action
-                is_pad = np.zeros(episode_len)
-                is_pad[action_len:] = 1
-
                 # new axis for different cameras
                 all_cam_images = []
                 for cam_name in config['camera_names']:
@@ -277,8 +271,6 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
                 # construct observations
                 image_data = torch.from_numpy(all_cam_images)
-                qpos_data = torch.from_numpy(cur_qpos).float().numpy()
-                is_pad = torch.from_numpy(is_pad).bool()
 
                 # channel last
                 image_data = torch.einsum('k h w c -> k c h w', image_data)
@@ -287,10 +279,10 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 image_data = image_data / 255.0
 
                 image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
-
-                qpos = pre_process(qpos_data)
+                
+                qpos = pre_process(qpos)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-                qpos_history[:, t] = qpos
+                # qpos_history[:, t] = qpos
 
                 # print(image_data.shape, qpos.shape, action_data.shape, is_pad.shape)
                 ### query policy
@@ -321,42 +313,46 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
                 ap_image = env.render_tools(
                     tool_poses={
-                        "cannula": (kg.point(target_qpos[:3]), kg.point(target_qpos[6:9])),
-                        "linear_drive": (kg.point(target_qpos[3:6]), kg.point(target_qpos[6:9])),
+                        "cannula": (geo.point(target_qpos[:3]), geo.vector(target_qpos[6:9])),
+                        "linear_drive": (geo.point(target_qpos[3:6]), geo.vector(target_qpos[6:9])),
                     },
                     view=ap_view
                 )
+                # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
                 ap_processed = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
+                # print(np.shape(ap_processed), np.min(ap_processed), np.max(ap_processed))
                 ap_images.append(ap_processed)
                 
                 # Generate lateral image  
                 lateral_image = env.render_tools(
                     tool_poses={
-                        "cannula": (kg.point(target_qpos[:3]), kg.point(target_qpos[6:9])),
-                        "linear_drive": (kg.point(target_qpos[3:6]), kg.point(target_qpos[6:9])),
+                        "cannula": (geo.point(target_qpos[:3]), geo.vector(target_qpos[6:9])),
+                        "linear_drive": (geo.point(target_qpos[3:6]), geo.vector(target_qpos[6:9])),
                     },
                     view=lateral_view
                 )
                 lateral_processed = image_utils.process_drr(lateral_image, neglog=False, invert=False)
+                # print(np.shape(lateral_processed), np.min(lateral_processed), np.max(lateral_processed))
                 lateral_images.append(lateral_processed)
 
-                env.render_tools
-
-                from deepdrr.utils import image_utils
                 image_dict['ap'] = ap_processed
                 image_dict['lateral'] = lateral_processed
 
                 qpos = target_qpos
 
+                qpos_history.append(qpos)
+
     # Convert to numpy arrays
     ap_images = np.array(ap_images)
+    print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
     lateral_images = np.array(lateral_images)
+    print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
     
     print(f"Generated {len(ap_images)} images")
     print(f"AP image shape: {ap_images.shape}")
     print(f"Lateral image shape: {lateral_images.shape}")
     
-    output_file = os.path.join(config['ckpt_dir'], f'{task_name}_eval.hdf5')
+    output_file = os.path.join(config['ckpt_dir'], f'{task_name}_eval_start_{starting_timestep}.hdf5')
     # Save new HDF5 file
     print(f"Saving to: {output_file}")
     
@@ -368,25 +364,28 @@ def eval_bc(config, ckpt_name, save_episode=True):
         # Mark as regenerated
         new_f.attrs['regenerated'] = True
         
+        qpos = np.array(qpos_history)
+        qvel = np.vstack(([0, 0, 0, 0, 0, 0, 0, 0, 0], np.diff(qpos, axis=0)))
+        qvel = qvel.tolist()
+
         # Copy datasets
         new_f.create_dataset("world_from_anatomical", data=file['world_from_anatomical'][:])
-        new_f.create_dataset("action", data=file['action'][:])
+        
+        # Copy observations
+        new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
+        obs_grp = new_f.create_group("observations")
+        obs_grp.create_dataset("qpos", data=np.array(qpos, dtype=np.float32))
+        obs_grp.create_dataset("qvel", data=np.array(qvel, dtype=np.float32))
         
         # Copy annotations
         anno_grp = new_f.create_group("annotations")
-        anno_grp.create_dataset("start", data=file['annotations/start'][:])
-        anno_grp.create_dataset("end", data=file['annotations/end'][:])
-        
-        # Copy observations
-        obs_grp = new_f.create_group("observations")
-        obs_grp.create_dataset("qpos", data=np.array(qpos_history.cpu()))
-        obs_grp.create_dataset("qvel", data=file['observations/qvel'][:])
+        anno_grp.create_dataset("start", data=np.array(annotation.startpoint_in_world.tolist()))
+        anno_grp.create_dataset("end", data=np.array(annotation.endpoint_in_world.tolist()))
         
         # Add projection matrices
         proj_grp = obs_grp.create_group("projection_matrices")
-        projection = env.device.get_camera_projection()
-        proj_grp.create_dataset("ap", data=np.array(projection))
-        proj_grp.create_dataset("lateral", data=np.array(projection))
+        proj_grp.create_dataset("ap", data=np.array(file['observations/projection_matrices/ap']))
+        proj_grp.create_dataset("lateral", data=np.array(file['observations/projection_matrices/lateral']))
         
         # Add regenerated images
         imgs_grp = obs_grp.create_group("images")
