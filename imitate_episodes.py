@@ -14,16 +14,9 @@ from einops import rearrange
 
 import h5py
 
-from constants import DT
-from constants import PUPPET_GRIPPER_JOINT_OPEN
-from constants import ACTION_DIM
 from utils import load_data # data functions
-from utils import sample_box_pose, sample_insertion_pose # robot functions
-from utils import compute_dict_mean, set_seed, detach_dict # helper functions
+from utils import compute_dict_mean, set_seed, detach_dict, generate_heatmap # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
-from visualize_episodes import save_videos
-
-from sim_env import BOX_POSE
 
 from deepdrr_simulation_platform import load_config, SimulationEnvironment
 from deepdrr.utils import image_utils
@@ -197,8 +190,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
     qpos_h5data = file['observations/qpos'][:]
     
     # Load annotation data
-    start_point = file['annotations/start'][:]
-    end_point = file['annotations/end'][:]
+    annotation_start = file['annotations/start'][:]
+    annotation_end = file['annotations/end'][:]
+    projection_matrices = {}
+    for cam_name in config['camera_names']:
+        projection_matrices[cam_name] = file[f'/observations/projection_matrices/{cam_name}'][:]
     world_from_anatomical = file['world_from_anatomical'][:]
     
     print(f"Case: {case}")
@@ -220,8 +216,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     
     # Create annotation object
     annotation = LineAnnotation(
-        startpoint=geo.point(start_point[:3]),
-        endpoint=geo.point(end_point[:3]),
+        startpoint=geo.point(annotation_start[:3]),
+        endpoint=geo.point(annotation_end[:3]),
         volume=ct,
         world_from_anatomical=ct.world_from_anatomical,
         # world_from_anatomical=kg.FrameTransform.identity(),
@@ -256,12 +252,19 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         starting_timestep = rollout_id * 20
         # max_timesteps = max_timesteps - starting_timestep
+
         with torch.inference_mode():
             # get observation at start_ts only
             image_dict = dict()
+            heatmap_dict = dict()
             for cam_name in config['camera_names']:
                 image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
-                print(np.shape(image_dict[cam_name]), np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
+                # Generate heatmap for this camera
+                heatmap_dict[cam_name] = generate_heatmap(
+                    annotation_start, annotation_end, 
+                    projection_matrices[cam_name], 
+                    image_dict[cam_name].shape[:2]  # (H, W)
+                )
             
             qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
 
@@ -269,7 +272,14 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 # new axis for different cameras
                 all_cam_images = []
                 for cam_name in config['camera_names']:
-                    all_cam_images.append(image_dict[cam_name])
+                    img = image_dict[cam_name].astype(np.float32)  # Ensure float32
+                    heatmap = heatmap_dict[cam_name].astype(np.float32)  # Ensure float32
+                    # Ensure heatmap has shape (H, W), add channel dim
+                    if heatmap.ndim == 2:
+                        heatmap = heatmap[..., None]  # (H, W, 1)
+                    # Concatenate along channel axis (last axis)
+                    img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
+                    all_cam_images.append(img_with_heatmap)
                 all_cam_images = np.stack(all_cam_images, axis=0)
 
                 # construct observations
