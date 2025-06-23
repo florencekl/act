@@ -89,10 +89,40 @@ class Backbone(BackboneBase):
     def __init__(self, name: str,
                  train_backbone: bool,
                  return_interm_layers: bool,
-                 dilation: bool):
+                 dilation: bool,
+                 input_channels: int = 3):
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
             pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+        
+        # Modify first conv layer to accept additional input channels
+        if input_channels != 3:
+            old_conv = backbone.conv1
+            backbone.conv1 = nn.Conv2d(
+                input_channels, 
+                old_conv.out_channels,
+                kernel_size=old_conv.kernel_size,
+                stride=old_conv.stride,
+                padding=old_conv.padding,
+                bias=old_conv.bias is not None
+            )
+            
+            # Initialize new conv layer weights
+            with torch.no_grad():
+                if input_channels > 3:
+                    # Copy pretrained weights for first 3 channels
+                    backbone.conv1.weight[:, :3, :, :] = old_conv.weight
+                    # Initialize additional channels with average of RGB channels
+                    avg_weight = old_conv.weight.mean(dim=1, keepdim=True)
+                    for i in range(3, input_channels):
+                        backbone.conv1.weight[:, i:i+1, :, :] = avg_weight
+                else:
+                    # If fewer channels, just copy the first few
+                    backbone.conv1.weight = old_conv.weight[:, :input_channels, :, :]
+                
+                if old_conv.bias is not None:
+                    backbone.conv1.bias = old_conv.bias
+        
         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
 
@@ -102,6 +132,7 @@ class Joiner(nn.Sequential):
         super().__init__(backbone, position_embedding)
 
     def forward(self, tensor_list: NestedTensor):
+        # print(tensor_list.shape)
         xs = self[0](tensor_list)
         out: List[NestedTensor] = []
         pos = []
@@ -117,7 +148,8 @@ def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    input_channels = getattr(args, 'input_channels', 3)  # Default to 3 if not specified
+    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, input_channels)
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model

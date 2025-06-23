@@ -37,11 +37,23 @@ class EpisodicDataset(torch.utils.data.Dataset):
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
             image_dict = dict()
-            # heatmap_dict = dict()
+            heatmap_dict = dict()
+            
+            # Load annotations and projection matrices
+            annotation_start = root['/annotations/start'][()]
+            annotation_end = root['/annotations/end'][()]
+            projection_matrices = {}
+            for cam_name in self.camera_names:
+                projection_matrices[cam_name] = root[f'/observations/projection_matrices/{cam_name}'][()]
+            
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
-                # Load heatmap for this camera (only once, not per timestep)
-                # heatmap_dict[cam_name] = np.array(root[f'/observations/heatmaps/{cam_name}'])
+                # Generate heatmap for this camera
+                heatmap_dict[cam_name] = self._generate_heatmap(
+                    annotation_start, annotation_end, 
+                    projection_matrices[cam_name], 
+                    image_dict[cam_name].shape[:2]  # (H, W)
+                )
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
@@ -59,19 +71,18 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # new axis for different cameras
         all_cam_images = []
         for cam_name in self.camera_names:
-            # img = image_dict[cam_name]
-            # heatmap = heatmap_dict[cam_name]
-            # # Ensure heatmap has shape (H, W), add channel dim
-            # if heatmap.ndim == 2:
-            #     heatmap = heatmap[..., None]  # (H, W, 1)
-            # # Concatenate along channel axis (last axis)
-            # img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
-            # all_cam_images.append(img_with_heatmap)
-            all_cam_images.append(image_dict[cam_name])
+            img = image_dict[cam_name].astype(np.float32)  # Ensure float32
+            heatmap = heatmap_dict[cam_name].astype(np.float32)  # Ensure float32
+            # Ensure heatmap has shape (H, W), add channel dim
+            if heatmap.ndim == 2:
+                heatmap = heatmap[..., None]  # (H, W, 1)
+            # Concatenate along channel axis (last axis)
+            img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
+            all_cam_images.append(img_with_heatmap)
         all_cam_images = np.stack(all_cam_images, axis=0)
 
         # construct observations
-        image_data = torch.from_numpy(all_cam_images)
+        image_data = torch.from_numpy(all_cam_images).float()  # Explicitly convert to float32
         qpos_data = torch.from_numpy(qpos).float()
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
@@ -85,6 +96,64 @@ class EpisodicDataset(torch.utils.data.Dataset):
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
         return image_data, qpos_data, action_data, is_pad
+
+    def _generate_heatmap(self, start_point, end_point, projection_matrix, image_shape, sigma=10.0):
+        """
+        Generate a Gaussian heatmap from 3D start and end points projected to image space.
+        
+        Args:
+            start_point: 3D coordinates of start point (x, y, z)
+            end_point: 3D coordinates of end point (x, y, z)
+            projection_matrix: 4x4 projection matrix for the camera
+            image_shape: (height, width) of the target image
+            sigma: Standard deviation for Gaussian kernel
+            
+        Returns:
+            heatmap: 2D numpy array with Gaussian heatmap
+        """
+        height, width = image_shape
+        heatmap = np.zeros((height, width), dtype=np.float32)
+        
+        # Convert 3D points to homogeneous coordinates
+        start_homo = np.array([start_point[0], start_point[1], start_point[2], 1.0])
+        end_homo = np.array([end_point[0], end_point[1], end_point[2], 1.0])
+        
+        # Project points to image space
+        start_proj = projection_matrix @ start_homo
+        end_proj = projection_matrix @ end_homo
+        
+        # Convert from homogeneous to 2D coordinates
+        if start_proj[2] > 0:  # Check if point is in front of camera
+            start_2d = start_proj[:2] / start_proj[2]
+            start_x, start_y = int(start_2d[0]), int(start_2d[1])
+        else:
+            start_x, start_y = -1, -1  # Invalid projection
+            
+        if end_proj[2] > 0:  # Check if point is in front of camera
+            end_2d = end_proj[:2] / end_proj[2]
+            end_x, end_y = int(end_2d[0]), int(end_2d[1])
+        else:
+            end_x, end_y = -1, -1  # Invalid projection
+        
+        # Generate Gaussian heatmaps for valid projections
+        points_to_draw = []
+        if 0 <= start_x < width and 0 <= start_y < height:
+            points_to_draw.append((start_x, start_y))
+        if 0 <= end_x < width and 0 <= end_y < height:
+            points_to_draw.append((end_x, end_y))
+            
+        # Create coordinate grids
+        y_grid, x_grid = np.mgrid[0:height, 0:width]
+        
+        for px, py in points_to_draw:
+            # Calculate distance from each pixel to the point
+            dist_sq = (x_grid - px) ** 2 + (y_grid - py) ** 2
+            # Generate Gaussian
+            gaussian = np.exp(-dist_sq / (2 * sigma ** 2))
+            # Add to heatmap (taking maximum to handle overlapping Gaussians)
+            heatmap = np.maximum(heatmap, gaussian)
+            
+        return heatmap
 
 
 def get_norm_stats(dataset_dir, num_episodes):

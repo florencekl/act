@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
@@ -74,11 +74,12 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
-                         'action_dim': action_dim
+                         'action_dim': action_dim,
+                         'input_channels': 4  # RGB + heatmap
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
-                         'camera_names': camera_names, 'action_dim': action_dim}
+                         'camera_names': camera_names, 'action_dim': action_dim, 'input_channels': 4}
     else:
         raise NotImplementedError
 
