@@ -5,6 +5,7 @@ import h5py
 from torch.utils.data import TensorDataset, DataLoader
 
 import IPython
+import time
 e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
@@ -51,6 +52,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
                 # Generate heatmap for this camera
+                # TODO need to optimize this / precompute heatmaps this is too slow
+                # start_time = time.time()
                 heatmap_dict[cam_name] = generate_heatmap(
                     annotation_start.astype(np.float32), 
                     annotation_end.astype(np.float32),
@@ -58,6 +61,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     image_dict[cam_name].shape[:2],  # (H, W)
                     world_from_anatomical
                 )
+                # elapsed_time = time.time() - start_time
+                # print(f"Generating heatmap for {cam_name} took {elapsed_time:.4f} seconds")
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
