@@ -37,6 +37,8 @@ def main(args):
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
     action_dim = args['action_dim'] if 'action_dim' in args else 9
 
+    print(f"temporal_agg: {args['temporal_agg']}")
+
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
     # we always wanna use our task configs in this repo, no outside dependencies
@@ -92,7 +94,6 @@ def main(args):
         'real_robot': not is_sim
     }
 
-    print(is_eval)
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_epoch_300_seed_0.ckpt']
@@ -182,7 +183,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     ### --- SETUP SIMULATION ENVIRONMENT --- ###
-    file = h5py.File("/data2/flora/vertebroplasty_imitation_0/episode_190.hdf5", 'r')
+    file = h5py.File("/data2/flora/vertebroplasty_imitation_0/episode_1200.hdf5", 'r')
     
     # Load metadata
     case = file.attrs['case']
@@ -232,7 +233,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     query_frequency = policy_config['num_queries']
     if temporal_agg:
-        query_frequency = 1
+        query_frequency = 10
         num_queries = policy_config['num_queries']
 
     max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
@@ -261,9 +262,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
                 # Generate heatmap for this camera
                 heatmap_dict[cam_name] = generate_heatmap(
-                    annotation_start, annotation_end, 
+                    annotation_start.astype(np.float32), 
+                    annotation_end.astype(np.float32), 
                     projection_matrices[cam_name], 
-                    image_dict[cam_name].shape[:2]  # (H, W)
+                    image_dict[cam_name].shape[:2],  # (H, W)
+                    world_from_anatomical
                 )
             
             qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
@@ -273,7 +276,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 all_cam_images = []
                 for cam_name in config['camera_names']:
                     img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-                    heatmap = heatmap_dict[cam_name].astype(np.float32)  # Ensure float32
+                    heatmap = heatmap_dict[cam_name]  # Ensure float32
                     # Ensure heatmap has shape (H, W), add channel dim
                     if heatmap.ndim == 2:
                         heatmap = heatmap[..., None]  # (H, W, 1)

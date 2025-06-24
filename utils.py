@@ -33,6 +33,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 start_ts = 0
             else:
                 start_ts = np.random.choice(episode_len)
+
+            world_from_anatomical = root['/world_from_anatomical'][()]
             # get observation at start_ts only
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
@@ -50,9 +52,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
                 # Generate heatmap for this camera
                 heatmap_dict[cam_name] = generate_heatmap(
-                    annotation_start, annotation_end, 
+                    annotation_start.astype(np.float32), 
+                    annotation_end.astype(np.float32),
                     projection_matrices[cam_name], 
-                    image_dict[cam_name].shape[:2]  # (H, W)
+                    image_dict[cam_name].shape[:2],  # (H, W)
+                    world_from_anatomical
                 )
             # get all actions after and including start_ts
             if is_sim:
@@ -72,13 +76,17 @@ class EpisodicDataset(torch.utils.data.Dataset):
         all_cam_images = []
         for cam_name in self.camera_names:
             img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-            heatmap = heatmap_dict[cam_name].astype(np.float32)  # Ensure float32
+            heatmap = heatmap_dict[cam_name]  # Ensure float32
             # Ensure heatmap has shape (H, W), add channel dim
             if heatmap.ndim == 2:
                 heatmap = heatmap[..., None]  # (H, W, 1)
             # Concatenate along channel axis (last axis)
             img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
             all_cam_images.append(img_with_heatmap)
+            
+            # TODO DEBUG if you want to visualize heatmaps and images that we use for training
+            # from visualize_heatmaps import visualize_images_and_heatmaps
+            # visualize_images_and_heatmaps(image_dict, heatmap_dict, 0, 0)
         all_cam_images = np.stack(all_cam_images, axis=0)
 
         # construct observations
@@ -210,60 +218,41 @@ def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-def generate_heatmap(self, start_point, end_point, projection_matrix, image_shape, sigma=10.0):
-        """
-        Generate a Gaussian heatmap from 3D start and end points projected to image space.
-        
-        Args:
-            start_point: 3D coordinates of start point (x, y, z)
-            end_point: 3D coordinates of end point (x, y, z)
-            projection_matrix: 4x4 projection matrix for the camera
-            image_shape: (height, width) of the target image
-            sigma: Standard deviation for Gaussian kernel
-            
-        Returns:
-            heatmap: 2D numpy array with Gaussian heatmap
-        """
-        height, width = image_shape
-        heatmap = np.zeros((height, width), dtype=np.float32)
-        
-        # Convert 3D points to homogeneous coordinates
-        start_homo = np.array([start_point[0], start_point[1], start_point[2], 1.0])
-        end_homo = np.array([end_point[0], end_point[1], end_point[2], 1.0])
-        
-        # Project points to image space
-        start_proj = projection_matrix @ start_homo
-        end_proj = projection_matrix @ end_homo
-        
-        # Convert from homogeneous to 2D coordinates
-        if start_proj[2] > 0:  # Check if point is in front of camera
-            start_2d = start_proj[:2] / start_proj[2]
-            start_x, start_y = int(start_2d[0]), int(start_2d[1])
-        else:
-            start_x, start_y = -1, -1  # Invalid projection
-            
-        if end_proj[2] > 0:  # Check if point is in front of camera
-            end_2d = end_proj[:2] / end_proj[2]
-            end_x, end_y = int(end_2d[0]), int(end_2d[1])
-        else:
-            end_x, end_y = -1, -1  # Invalid projection
-        
-        # Generate Gaussian heatmaps for valid projections
-        points_to_draw = []
-        if 0 <= start_x < width and 0 <= start_y < height:
-            points_to_draw.append((start_x, start_y))
-        if 0 <= end_x < width and 0 <= end_y < height:
-            points_to_draw.append((end_x, end_y))
-            
-        # Create coordinate grids
-        y_grid, x_grid = np.mgrid[0:height, 0:width]
-        
-        for px, py in points_to_draw:
-            # Calculate distance from each pixel to the point
-            dist_sq = (x_grid - px) ** 2 + (y_grid - py) ** 2
-            # Generate Gaussian
-            gaussian = np.exp(-dist_sq / (2 * sigma ** 2))
-            # Add to heatmap (taking maximum to handle overlapping Gaussians)
-            heatmap = np.maximum(heatmap, gaussian)
-            
-        return heatmap
+def generate_heatmap(start_3d, end_3d, proj_matrix, image_shape, world_from_anatomical=None):
+    """
+    Generate a 2D Gaussian heatmap.
+
+    Args:
+        start_3d (Tensor): (3,) Start point in 3D.
+        end_3d (Tensor): (3,) End point in 3D.
+        proj_matrix (Tensor): (3, 4) Projection matrix.
+        image_shape (tuple): (H, W) of the output heatmap.
+
+    Returns:
+        Tensor: (H, W) heatmap.
+    """
+    def project(point):
+        proj = torch.tensor(proj_matrix) @ point
+        return proj[:2] / proj[2]
+    
+    if world_from_anatomical is not None:
+        start_3d = torch.tensor(world_from_anatomical) @ torch.tensor(start_3d)
+        end_3d = torch.tensor(world_from_anatomical) @ torch.tensor(end_3d)
+
+    start_2d = project(torch.tensor(start_3d))
+    end_2d = project(torch.tensor(end_3d))
+
+    # print(start_2d, end_2d)
+
+    dist = torch.norm(start_2d - end_2d)
+
+    H, W = image_shape
+    grid_y, grid_x = torch.meshgrid(torch.arange(H, dtype=torch.float32),
+                                      torch.arange(W, dtype=torch.float32),
+                                      indexing='ij')
+    sigma = dist if dist > 1e-2 else torch.tensor(1e-2)
+    exponent = -((grid_x - end_2d[0])**2 + (grid_y - end_2d[1])**2) / (2 * sigma**2)
+    heatmap = torch.exp(exponent)
+    return heatmap
+
+    
