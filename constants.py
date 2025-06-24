@@ -5,7 +5,7 @@ DATA_DIR = '/data2/flora'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
         'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_0',
-        'num_episodes': 5000,
+        'num_episodes': 2000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
