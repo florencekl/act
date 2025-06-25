@@ -197,6 +197,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
     for cam_name in config['camera_names']:
         projection_matrices[cam_name] = file[f'/observations/projection_matrices/{cam_name}'][:]
     world_from_anatomical = file['world_from_anatomical'][:]
+
+    lateral_translation = file['translations/lateral_translate'][:]
+    superior_translation = file['translations/superior_translate'][:]
     
     print(f"Case: {case}")
     print(f"Frames: {len(qpos_h5data)}")
@@ -226,7 +229,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
     )
     
     # Generate camera views
-    ap_view, lateral_view = env.generate_views(annotation)
+    # TODO offset views by hdf...
+    ap_view, lateral_view = env.generate_views(annotation, superior_translate=superior_translation, lateral_translate=lateral_translation)
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
@@ -260,7 +264,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
             heatmap_dict = dict()
             for cam_name in config['camera_names']:
                 image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
-                heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap']
+                heatmap_dict[cam_name] = file[f'/observations/images/{cam_name}_heatmap']
             
             qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
 
