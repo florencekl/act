@@ -15,7 +15,7 @@ from einops import rearrange
 import h5py
 
 from utils import load_data # data functions
-from utils import compute_dict_mean, set_seed, detach_dict, generate_heatmap # helper functions
+from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 
 from deepdrr_simulation_platform import load_config, SimulationEnvironment
@@ -260,14 +260,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
             heatmap_dict = dict()
             for cam_name in config['camera_names']:
                 image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
-                # Generate heatmap for this camera
-                heatmap_dict[cam_name] = generate_heatmap(
-                    annotation_start.astype(np.float32), 
-                    annotation_end.astype(np.float32), 
-                    projection_matrices[cam_name], 
-                    image_dict[cam_name].shape[:2],  # (H, W)
-                    world_from_anatomical
-                )
+                heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap']
             
             qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
 

@@ -51,18 +51,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
-                # Generate heatmap for this camera
-                # TODO need to optimize this / precompute heatmaps this is too slow
-                # start_time = time.time()
-                heatmap_dict[cam_name] = generate_heatmap(
-                    annotation_start.astype(np.float32), 
-                    annotation_end.astype(np.float32),
-                    projection_matrices[cam_name], 
-                    image_dict[cam_name].shape[:2],  # (H, W)
-                    world_from_anatomical
-                )
-                # elapsed_time = time.time() - start_time
-                # print(f"Generating heatmap for {cam_name} took {elapsed_time:.4f} seconds")
+                heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap']
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
@@ -222,42 +211,5 @@ def detach_dict(d):
 def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
-
-def generate_heatmap(start_3d, end_3d, proj_matrix, image_shape, world_from_anatomical=None):
-    """
-    Generate a 2D Gaussian heatmap.
-
-    Args:
-        start_3d (Tensor): (3,) Start point in 3D.
-        end_3d (Tensor): (3,) End point in 3D.
-        proj_matrix (Tensor): (3, 4) Projection matrix.
-        image_shape (tuple): (H, W) of the output heatmap.
-
-    Returns:
-        Tensor: (H, W) heatmap.
-    """
-    def project(point):
-        proj = torch.tensor(proj_matrix) @ point
-        return proj[:2] / proj[2]
-    
-    if world_from_anatomical is not None:
-        start_3d = torch.tensor(world_from_anatomical) @ torch.tensor(start_3d)
-        end_3d = torch.tensor(world_from_anatomical) @ torch.tensor(end_3d)
-
-    start_2d = project(torch.tensor(start_3d))
-    end_2d = project(torch.tensor(end_3d))
-
-    # print(start_2d, end_2d)
-
-    dist = torch.norm(start_2d - end_2d)
-
-    H, W = image_shape
-    grid_y, grid_x = torch.meshgrid(torch.arange(H, dtype=torch.float32),
-                                      torch.arange(W, dtype=torch.float32),
-                                      indexing='ij')
-    sigma = dist if dist > 1e-2 else torch.tensor(1e-2)
-    exponent = -((grid_x - end_2d[0])**2 + (grid_y - end_2d[1])**2) / (2 * sigma**2)
-    heatmap = torch.exp(exponent)
-    return heatmap
 
     
