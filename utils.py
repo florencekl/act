@@ -51,7 +51,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
-                heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap']
+                heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
