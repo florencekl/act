@@ -18,7 +18,7 @@ from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 
-from deepdrr_simulation_platform import load_config, SimulationEnvironment
+from deepdrr_simulation_platform import generate_heatmap, load_config, SimulationEnvironment
 from deepdrr.utils import image_utils
 
 import IPython
@@ -32,10 +32,12 @@ def main(args):
     policy_class = args['policy_class'] if 'policy_class' in args else 'ACT'
     onscreen_render = args['onscreen_render']
     task_name = args['task_name']
-    batch_size_train = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
-    batch_size_val = args['batch_size'] if 'batch_size' not in args else 100 # batch size should be smaller than the number of recorded actions
+    batch_size_train = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
+    batch_size_val = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
     action_dim = args['action_dim'] if 'action_dim' in args else 9
+
+    print(batch_size_train, batch_size_val)
 
     print(f"temporal_agg: {args['temporal_agg']}")
 
@@ -99,8 +101,20 @@ def main(args):
         # ckpt_names = [f'policy_epoch_300_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
-            results.append([ckpt_name, success_rate, avg_return])
+            filenames = [
+                "/data2/flora/vertebroplasty_imitation_1/episode_200.hdf5",
+                "/data2/flora/vertebroplasty_imitation_1/episode_401.hdf5",
+                "/data2/flora/vertebroplasty_imitation_1/episode_1200.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1300.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1400.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1500.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1600.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1700.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1800.hdf5"
+            ]
+            for name in filenames:
+                success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, filename=name)
+                results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
             print(f'{ckpt_name}: {success_rate=} {avg_return=}')
@@ -156,7 +170,7 @@ def get_image(ts, camera_names):
 
 
 
-def eval_bc(config, ckpt_name, save_episode=True):
+def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
@@ -183,7 +197,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     ### --- SETUP SIMULATION ENVIRONMENT --- ###
-    file = h5py.File("/data2/flora/vertebroplasty_imitation_0/episode_1200.hdf5", 'r')
+    if filename is None:
+        filename = "/data2/flora/vertebroplasty_imitation_1/episode_1200.hdf5"
+    file = h5py.File(filename, 'r')
     
     # Load metadata
     case = file.attrs['case']
@@ -198,8 +214,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
         projection_matrices[cam_name] = file[f'/observations/projection_matrices/{cam_name}'][:]
     world_from_anatomical = file['world_from_anatomical'][:]
 
-    lateral_translation = file['translations/lateral_translate'][:]
-    superior_translation = file['translations/superior_translate'][:]
+    lateral_translation = file['translations/lateral_translate'][()].item()
+    superior_translation = file['translations/lateral_translate'][()].item()
     
     print(f"Case: {case}")
     print(f"Frames: {len(qpos_h5data)}")
@@ -230,7 +246,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     
     # Generate camera views
     # TODO offset views by hdf...
-    ap_view, lateral_view = env.generate_views(annotation, superior_translate=superior_translation, lateral_translate=lateral_translation)
+    ap_view, lateral_view = env.generate_views(annotation, lateral_translate=lateral_translation, superior_translate=superior_translation)
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
@@ -240,9 +256,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
         query_frequency = 10
         num_queries = policy_config['num_queries']
 
-    max_timesteps = int(max_timesteps * 1) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
 
-    num_rollouts = 5
+    num_rollouts = 1
     for rollout_id in range(num_rollouts):
         rollout_id += 0
         lateral_images = []
@@ -264,8 +280,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
             heatmap_dict = dict()
             for cam_name in config['camera_names']:
                 image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
-                heatmap_dict[cam_name] = file[f'/observations/images/{cam_name}_heatmap']
+                heatmap_dict[cam_name] = np.array(file[f'/observations/images/{cam_name}_heatmap'][()])
+                print(np.shape(heatmap_dict[cam_name]))
             
+            # TODO get new starting qpos from the sim environment directly
+            print(f"starting qpos: {qpos_h5data[starting_timestep]}")
             qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
 
             for t in range(max_timesteps):
@@ -329,7 +348,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
                         "cannula": (geo.point(target_qpos[:3]), geo.vector(target_qpos[6:9])),
                         "linear_drive": (geo.point(target_qpos[3:6]), geo.vector(target_qpos[6:9])),
                     },
-                    view=ap_view
+                    view=ap_view,
+                    rotation=56,
                 )
                 # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
                 ap_processed = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
@@ -342,7 +362,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
                         "cannula": (geo.point(target_qpos[:3]), geo.vector(target_qpos[6:9])),
                         "linear_drive": (geo.point(target_qpos[3:6]), geo.vector(target_qpos[6:9])),
                     },
-                    view=lateral_view
+                    view=lateral_view,
+                    rotation=56,
                 )
                 lateral_processed = image_utils.process_drr(lateral_image, neglog=False, invert=False)
                 # print(np.shape(lateral_processed), np.min(lateral_processed), np.max(lateral_processed))
@@ -351,6 +372,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 image_dict['ap'] = ap_processed
                 image_dict['lateral'] = lateral_processed
 
+                # print(f"target qpos: {target_qpos[:3]}")
                 qpos = target_qpos
 
                 qpos_history.append(qpos)
@@ -365,7 +387,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
         print(f"AP image shape: {ap_images.shape}")
         print(f"Lateral image shape: {lateral_images.shape}")
         
-        output_file = os.path.join(config['ckpt_dir'], f'{task_name}_eval_start_{starting_timestep}.hdf5')
+        output_file = filename.replace('.hdf5', '_eval.hdf5')
+        
+        output_file = os.path.join(config['ckpt_dir'], os.path.split(filename)[1])
         # Save new HDF5 file
         print(f"Saving to: {output_file}")
         
@@ -392,8 +416,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
             
             # Copy annotations
             anno_grp = new_f.create_group("annotations")
-            anno_grp.create_dataset("start", data=np.array(annotation.startpoint_in_world.tolist()))
-            anno_grp.create_dataset("end", data=np.array(annotation.endpoint_in_world.tolist()))
+            anno_grp.create_dataset("start", data=np.array(annotation.startpoint.tolist()))
+            anno_grp.create_dataset("end", data=np.array(annotation.endpoint.tolist()))
             
             # Add projection matrices
             proj_grp = obs_grp.create_group("projection_matrices")
@@ -404,6 +428,23 @@ def eval_bc(config, ckpt_name, save_episode=True):
             imgs_grp = obs_grp.create_group("images")
             imgs_grp.create_dataset("ap", data=ap_images)
             imgs_grp.create_dataset("lateral", data=lateral_images)
+
+            # TODO
+            imgs_grp.create_dataset("ap_heatmap", data=generate_heatmap(
+                annotation.startpoint.tolist(),
+                annotation.endpoint.tolist(),
+                np.array(file['observations/projection_matrices/ap']),
+                ap_images[0].shape[:2],  # (H, W)
+                np.array(ct.world_from_anatomical)
+            ))
+
+            imgs_grp.create_dataset("lateral_heatmap", data=generate_heatmap(
+                annotation.startpoint.tolist(),
+                annotation.endpoint.tolist(),
+                np.array(file['observations/projection_matrices/lateral']),
+                lateral_images[0].shape[:2],  # (H, W)
+                np.array(ct.world_from_anatomical)
+            ))
 
     return 0, 0
 
