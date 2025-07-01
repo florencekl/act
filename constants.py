@@ -4,8 +4,8 @@ import pathlib
 DATA_DIR = '/data2/flora'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
-        'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_1',
-        'num_episodes': 5000,
+        'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_2',
+        'num_episodes': 1000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },

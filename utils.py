@@ -35,7 +35,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             else:
                 start_ts = np.random.choice(episode_len)
 
-            world_from_anatomical = root['/world_from_anatomical'][()]
+            world_from_anatomical = root['annotations/world_from_anatomical'][()]
             # get observation at start_ts only
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]

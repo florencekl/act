@@ -11,9 +11,12 @@ import matplotlib.pyplot as plt
 from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
+import wandb
+import platform
 
 import h5py
 
+from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
 from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
@@ -35,7 +38,12 @@ def main(args):
     batch_size_train = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
     batch_size_val = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
-    action_dim = args['action_dim'] if 'action_dim' in args else 9
+    action_dim = args['action_dim'] if 'action_dim' in args else 11
+    
+    # wandb parameters
+    use_wandb = args.get('use_wandb', False)
+    wandb_project = args.get('wandb_project', 'vertebroplasty-imitation')
+    wandb_entity = args.get('wandb_entity', None)
 
     print(batch_size_train, batch_size_val)
 
@@ -93,7 +101,13 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'use_wandb': use_wandb,
+        'wandb_project': wandb_project,
+        'wandb_entity': wandb_entity,
+        'batch_size_train': batch_size_train,
+        'batch_size_val': batch_size_val,
+        'num_episodes': num_episodes
     }
 
     if is_eval:
@@ -102,15 +116,20 @@ def main(args):
         results = []
         for ckpt_name in ckpt_names:
             filenames = [
-                "/data2/flora/vertebroplasty_imitation_1/episode_200.hdf5",
-                "/data2/flora/vertebroplasty_imitation_1/episode_401.hdf5",
-                "/data2/flora/vertebroplasty_imitation_1/episode_1200.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_200.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_401.hdf5",
+                # "/data2/flora/vertebroplasty_imitation_1/episode_1200.hdf5",
                 # "/data2/flora/vertebroplasty_imitation_1/episode_1300.hdf5",
                 # "/data2/flora/vertebroplasty_imitation_1/episode_1400.hdf5",
                 # "/data2/flora/vertebroplasty_imitation_1/episode_1500.hdf5",
                 # "/data2/flora/vertebroplasty_imitation_1/episode_1600.hdf5",
                 # "/data2/flora/vertebroplasty_imitation_1/episode_1700.hdf5",
                 # "/data2/flora/vertebroplasty_imitation_1/episode_1800.hdf5"
+                "/data2/flora/vertebroplasty_imitation_2/episode_5001.hdf5",
+                "/data2/flora/vertebroplasty_imitation_2/episode_5002.hdf5",
+                "/data2/flora/vertebroplasty_imitation_2/episode_5003.hdf5",
+                "/data2/flora/vertebroplasty_imitation_2/episode_5004.hdf5",
+                "/data2/flora/vertebroplasty_imitation_2/episode_5005.hdf5",
             ]
             for name in filenames:
                 success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, filename=name)
@@ -120,6 +139,77 @@ def main(args):
             print(f'{ckpt_name}: {success_rate=} {avg_return=}')
         print()
         exit()
+
+    # Initialize wandb for training
+    if use_wandb:
+        # Create run name with key parameters
+        run_name = f"{policy_class}_{task_name}_lr{args['lr']}_bs{batch_size_train}_seed{args['seed']}"
+        
+        wandb.init(
+            project=wandb_project,
+            entity=wandb_entity,
+            name=run_name,
+            config=config,
+            tags=[policy_class, task_name],
+            save_code=True
+        )
+        # Log the config as a table for easy viewing
+        wandb.config.update(config)
+        
+        # Create a table to track model architecture
+        if policy_class == 'ACT':
+            model_info = {
+                'policy_class': policy_class,
+                'hidden_dim': policy_config['hidden_dim'],
+                'num_queries': policy_config['num_queries'],
+                'enc_layers': policy_config['enc_layers'],
+                'dec_layers': policy_config['dec_layers'],
+                'nheads': policy_config['nheads'],
+                'backbone': policy_config['backbone'],
+                'action_dim': policy_config['action_dim'],
+                'input_channels': policy_config['input_channels']
+            }
+        else:
+            model_info = {
+                'policy_class': policy_class,
+                'backbone': policy_config['backbone'],
+                'action_dim': policy_config['action_dim'],
+                'input_channels': policy_config['input_channels']
+            }
+        
+        wandb.log({"model_architecture": wandb.Table(
+            columns=list(model_info.keys()),
+            data=[list(model_info.values())]
+        )}, commit=False)
+        
+        # Log system information
+        system_info = {
+            'python_version': platform.python_version(),
+            'pytorch_version': torch.__version__,
+            'cuda_available': torch.cuda.is_available(),
+            'cuda_version': torch.version.cuda if torch.cuda.is_available() else 'N/A',
+            'gpu_count': torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            'platform': platform.platform()
+        }
+        if torch.cuda.is_available():
+            system_info['gpu_name'] = torch.cuda.get_device_name(0)
+        
+        wandb.log({"system_info": wandb.Table(
+            columns=list(system_info.keys()),
+            data=[list(system_info.values())]
+        )}, commit=False)
+        
+        # Log task configuration
+        wandb.log({"task_config": wandb.Table(
+            columns=list(task_config.keys()),
+            data=[list(task_config.values())]
+        )}, commit=False)
+
+        # Log command line arguments
+        wandb.log({"args": wandb.Table(
+            columns=list(args.keys()),
+            data=[list(args.values())]
+        )}, commit=False)
 
     train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
 
@@ -137,6 +227,19 @@ def main(args):
     ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}')
+    
+    # Log final results to wandb
+    if use_wandb:
+        wandb.log({
+            'final/best_epoch': best_epoch,
+            'final/best_val_loss': min_val_loss
+        })
+        # Save model as wandb artifact
+        artifact = wandb.Artifact(f"model_best_{run_name}", type="model")
+        artifact.add_file(ckpt_path)
+        wandb.log_artifact(artifact)
+        
+        wandb.finish()
 
 
 def make_policy(policy_class, policy_config):
@@ -198,7 +301,7 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
 
     ### --- SETUP SIMULATION ENVIRONMENT --- ###
     if filename is None:
-        filename = "/data2/flora/vertebroplasty_imitation_1/episode_1200.hdf5"
+        filename = "/data2/flora/vertebroplasty_imitation_1/episode_5001.hdf5"
     file = h5py.File(filename, 'r')
     
     # Load metadata
@@ -212,10 +315,10 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     projection_matrices = {}
     for cam_name in config['camera_names']:
         projection_matrices[cam_name] = file[f'/observations/projection_matrices/{cam_name}'][:]
-    world_from_anatomical = file['world_from_anatomical'][:]
+    world_from_anatomical = file['annotations/world_from_anatomical'][:]
 
-    lateral_translation = file['translations/lateral_translate'][()].item()
-    superior_translation = file['translations/lateral_translate'][()].item()
+    lateral_translation = file['device/lateral_translate'][()].item()
+    superior_translation = file['device/superior_translate'][()].item()
     
     print(f"Case: {case}")
     print(f"Frames: {len(qpos_h5data)}")
@@ -343,31 +446,44 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                 action = post_process(raw_action)
                 target_qpos = action
 
+                cannula_ap = target_qpos[:2]
+                cannula_lateral = target_qpos[2:4]
+                linear_ap = target_qpos[4:6]
+                linear_lateral = target_qpos[6:8]
+                direction = target_qpos[8:11]
+
+                # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
+                # print(direction)
+                cannula_point = triangulate_point(cannula_ap, cannula_lateral, projection_matrices["ap"], projection_matrices["lateral"])
+                linear_point = triangulate_point(linear_ap, linear_lateral, projection_matrices["ap"], projection_matrices["lateral"])
+
                 ap_image = env.render_tools(
                     tool_poses={
-                        "cannula": (geo.point(target_qpos[:3]), geo.vector(target_qpos[6:9])),
-                        "linear_drive": (geo.point(target_qpos[3:6]), geo.vector(target_qpos[6:9])),
+                        "cannula": (geo.point(cannula_point), geo.vector(direction)),
+                        "linear_drive": (geo.point(linear_point), geo.vector(direction)),
                     },
                     view=ap_view,
-                    rotation=56,
+                    rotation=0,
                 )
                 # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
                 ap_processed = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
                 # print(np.shape(ap_processed), np.min(ap_processed), np.max(ap_processed))
                 ap_images.append(ap_processed)
+                ap_projection = env.device.get_camera_projection()
                 
                 # Generate lateral image  
                 lateral_image = env.render_tools(
                     tool_poses={
-                        "cannula": (geo.point(target_qpos[:3]), geo.vector(target_qpos[6:9])),
-                        "linear_drive": (geo.point(target_qpos[3:6]), geo.vector(target_qpos[6:9])),
+                        "cannula": (geo.point(cannula_point), geo.vector(direction)),
+                        "linear_drive": (geo.point(linear_point), geo.vector(direction)),
                     },
                     view=lateral_view,
-                    rotation=56,
+                    rotation=0,
                 )
                 lateral_processed = image_utils.process_drr(lateral_image, neglog=False, invert=False)
                 # print(np.shape(lateral_processed), np.min(lateral_processed), np.max(lateral_processed))
                 lateral_images.append(lateral_processed)
+                lateral_projection = env.device.get_camera_projection()
 
                 image_dict['ap'] = ap_processed
                 image_dict['lateral'] = lateral_processed
@@ -402,11 +518,11 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
             new_f.attrs['regenerated'] = True
             
             qpos = np.array(qpos_history)
-            qvel = np.vstack(([0, 0, 0, 0, 0, 0, 0, 0, 0], np.diff(qpos, axis=0)))
+            qvel = np.vstack(([0] * 11, np.diff(qpos, axis=0)))
             qvel = qvel.tolist()
 
             # Copy datasets
-            new_f.create_dataset("world_from_anatomical", data=file['world_from_anatomical'][:])
+            new_f.create_dataset("annotations/world_from_anatomical", data=file['annotations/world_from_anatomical'][:])
             
             # Copy observations
             new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
@@ -421,8 +537,8 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
             
             # Add projection matrices
             proj_grp = obs_grp.create_group("projection_matrices")
-            proj_grp.create_dataset("ap", data=np.array(file['observations/projection_matrices/ap']))
-            proj_grp.create_dataset("lateral", data=np.array(file['observations/projection_matrices/lateral']))
+            proj_grp.create_dataset("ap", data=np.array(ap_projection))
+            proj_grp.create_dataset("lateral", data=np.array(lateral_projection))
             
             # Add regenerated images
             imgs_grp = obs_grp.create_group("images")
@@ -433,7 +549,7 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
             imgs_grp.create_dataset("ap_heatmap", data=generate_heatmap(
                 annotation.startpoint.tolist(),
                 annotation.endpoint.tolist(),
-                np.array(file['observations/projection_matrices/ap']),
+                np.array(ap_projection),
                 ap_images[0].shape[:2],  # (H, W)
                 np.array(ct.world_from_anatomical)
             ))
@@ -441,7 +557,7 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
             imgs_grp.create_dataset("lateral_heatmap", data=generate_heatmap(
                 annotation.startpoint.tolist(),
                 annotation.endpoint.tolist(),
-                np.array(file['observations/projection_matrices/lateral']),
+                np.array(lateral_projection),
                 lateral_images[0].shape[:2],  # (H, W)
                 np.array(ct.world_from_anatomical)
             ))
@@ -462,26 +578,29 @@ def train_bc(train_dataloader, val_dataloader, config):
     seed = config['seed']
     policy_class = config['policy_class']
     policy_config = config['policy_config']
+    use_wandb = config.get('use_wandb', False)
 
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
+    
+    # Watch model with wandb
+    if use_wandb:
+        wandb.watch(policy, log="all", log_freq=100)
 
     train_history = []
     validation_history = []
     min_val_loss = np.inf
     best_ckpt_info = None
+    
     for epoch in tqdm(range(num_epochs)):
-        # print(f'\nEpoch {epoch}')
         # validation
         with torch.inference_mode():
             policy.eval()
             epoch_dicts = []
             for batch_idx, data in enumerate(val_dataloader):
-                # print(f'Validation batch {batch_idx}')
-                # print(f'Batch data shapes: {data}')
                 forward_dict = forward_pass(data, policy)
                 epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
@@ -491,12 +610,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             if epoch_val_loss < min_val_loss:
                 min_val_loss = epoch_val_loss
                 best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
-        # print(f'Val loss:   {epoch_val_loss:.5f}')
-        summary_string = ''
-        for k, v in epoch_summary.items():
-            summary_string += f'{k}: {v.item():.3f} '
-        # print(f"Summary_String: {summary_string}")
-
+        
         # training
         policy.train()
         optimizer.zero_grad()
@@ -508,18 +622,37 @@ def train_bc(train_dataloader, val_dataloader, config):
             optimizer.step()
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
-        epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
-        epoch_train_loss = epoch_summary['loss']
-        # print(f'Train loss: {epoch_train_loss:.5f}')
-        summary_string = ''
-        for k, v in epoch_summary.items():
-            summary_string += f'{k}: {v.item():.3f} '
-        # print(summary_string)
+        
+        # Compute epoch training summary
+        epoch_summary_train = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
+        epoch_train_loss = epoch_summary_train['loss']
+        
+        # Log to wandb
+        if use_wandb:
+            log_dict = {}
+            # Log validation metrics with val_ prefix
+            for k, v in epoch_summary.items():
+                log_dict[f'val_{k}'] = v.item()
+            # Log training metrics with train_ prefix  
+            for k, v in epoch_summary_train.items():
+                log_dict[f'train_{k}'] = v.item()
+            
+            log_dict['epoch'] = epoch
+            log_dict['learning_rate'] = optimizer.param_groups[0]['lr']
+            log_dict['best_val_loss'] = min_val_loss
+            
+            wandb.log(log_dict, step=epoch)
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             torch.save(policy.state_dict(), ckpt_path)
-            plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
+            plot_history(train_history, validation_history, epoch, ckpt_dir, seed, use_wandb)
+            
+            # Log checkpoint as wandb artifact
+            if use_wandb:
+                artifact = wandb.Artifact(f"checkpoint_epoch_{epoch}", type="model")
+                artifact.add_file(ckpt_path)
+                wandb.log_artifact(artifact)
 
     ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
     torch.save(policy.state_dict(), ckpt_path)
@@ -530,25 +663,37 @@ def train_bc(train_dataloader, val_dataloader, config):
     print(f'Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at epoch {best_epoch}')
 
     # save training curves
-    plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed)
+    plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed, use_wandb)
 
     return best_ckpt_info
 
 
-def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
+def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed, use_wandb=False):
+    print("plotting history")
     # save training curves
     for key in train_history[0]:
         plot_path = os.path.join(ckpt_dir, f'train_val_{key}_seed_{seed}.png')
-        plt.figure()
+        plt.figure(figsize=(10, 6))
         train_values = [summary[key].item() for summary in train_history]
         val_values = [summary[key].item() for summary in validation_history]
-        plt.plot(np.linspace(0, num_epochs-1, len(train_history)), train_values, label='train')
-        plt.plot(np.linspace(0, num_epochs-1, len(validation_history)), val_values, label='validation')
-        # plt.ylim([-0.1, 1])
+        
+        epochs_train = np.linspace(0, num_epochs-1, len(train_history))
+        epochs_val = np.linspace(0, num_epochs-1, len(validation_history))
+        
+        plt.plot(epochs_train, train_values, label='train', alpha=0.7)
+        plt.plot(epochs_val, val_values, label='validation', alpha=0.7)
         plt.tight_layout()
         plt.legend()
-        plt.title(key)
-        plt.savefig(plot_path)
+        plt.title(f'{key} - Training History')
+        plt.xlabel('Epoch')
+        plt.ylabel(key)
+        plt.grid(True, alpha=0.3)
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        
+        # Log to wandb
+        if use_wandb:
+            wandb.log({f"plots/{key}_history": wandb.Image(plt)}, commit=False)
+        
         plt.close()
     print(f'Saved plots to {ckpt_dir}')
 
@@ -572,5 +717,10 @@ if __name__ == '__main__':
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    
+    # for wandb logging
+    parser.add_argument('--use_wandb', action='store', help='Enable wandb logging', required=False, default=True, type=bool)
+    parser.add_argument('--wandb_project', action='store', type=str, help='wandb project name', default='vertebroplasty-imitation')
+    parser.add_argument('--wandb_entity', action='store', type=str, help='wandb entity/username', default=None)
     
     main(vars(parser.parse_args()))
