@@ -45,10 +45,6 @@ def main(args):
     wandb_project = args.get('wandb_project', 'vertebroplasty-imitation')
     wandb_entity = args.get('wandb_entity', None)
 
-    print(batch_size_train, batch_size_val)
-
-    print(f"temporal_agg: {args['temporal_agg']}")
-
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
     # we always wanna use our task configs in this repo, no outside dependencies
@@ -107,7 +103,8 @@ def main(args):
         'wandb_entity': wandb_entity,
         'batch_size_train': batch_size_train,
         'batch_size_val': batch_size_val,
-        'num_episodes': num_episodes
+        'num_episodes': num_episodes,
+        'resume_from_checkpoint': args.get('resume_from_checkpoint', None)
     }
 
     if is_eval:
@@ -116,20 +113,13 @@ def main(args):
         results = []
         for ckpt_name in ckpt_names:
             filenames = [
-                # "/data2/flora/vertebroplasty_imitation_1/episode_200.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_401.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1200.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1300.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1400.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1500.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1600.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1700.hdf5",
-                # "/data2/flora/vertebroplasty_imitation_1/episode_1800.hdf5"
                 "/data2/flora/vertebroplasty_imitation_2/episode_5001.hdf5",
                 "/data2/flora/vertebroplasty_imitation_2/episode_5002.hdf5",
                 "/data2/flora/vertebroplasty_imitation_2/episode_5003.hdf5",
                 "/data2/flora/vertebroplasty_imitation_2/episode_5004.hdf5",
                 "/data2/flora/vertebroplasty_imitation_2/episode_5005.hdf5",
+                "/data2/flora/vertebroplasty_imitation_2/episode_5100.hdf5",
+                "/data2/flora/vertebroplasty_imitation_2/episode_5175.hdf5",
             ]
             for name in filenames:
                 success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, filename=name)
@@ -350,6 +340,8 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     # Generate camera views
     # TODO offset views by hdf...
     ap_view, lateral_view = env.generate_views(annotation, lateral_translate=lateral_translation, superior_translate=superior_translation)
+    
+    env.device.source_to_detector_distance = file[f'device/source_to_detector_distance'][()].item()
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
@@ -520,9 +512,6 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
             qpos = np.array(qpos_history)
             qvel = np.vstack(([0] * 11, np.diff(qpos, axis=0)))
             qvel = qvel.tolist()
-
-            # Copy datasets
-            new_f.create_dataset("annotations/world_from_anatomical", data=file['annotations/world_from_anatomical'][:])
             
             # Copy observations
             new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
@@ -534,6 +523,7 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
             anno_grp = new_f.create_group("annotations")
             anno_grp.create_dataset("start", data=np.array(annotation.startpoint.tolist()))
             anno_grp.create_dataset("end", data=np.array(annotation.endpoint.tolist()))
+            anno_grp.create_dataset("world_from_anatomical", data=file['annotations/world_from_anatomical'][:])
             
             # Add projection matrices
             proj_grp = obs_grp.create_group("projection_matrices")
@@ -579,6 +569,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     use_wandb = config.get('use_wandb', False)
+    resume_from_checkpoint = config.get('resume_from_checkpoint', None)
 
     set_seed(seed)
 
@@ -586,16 +577,42 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
     
-    # Watch model with wandb
-    if use_wandb:
-        wandb.watch(policy, log="all", log_freq=100)
-
+    # Initialize training state
+    start_epoch = 0
     train_history = []
     validation_history = []
     min_val_loss = np.inf
     best_ckpt_info = None
     
-    for epoch in tqdm(range(num_epochs)):
+    # Load checkpoint if resuming
+    if resume_from_checkpoint is not None:
+        if os.path.exists(resume_from_checkpoint):
+            print(f"Resuming training from checkpoint: {resume_from_checkpoint}")
+            checkpoint = torch.load(resume_from_checkpoint)
+            
+            # Load model state
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                # Full checkpoint with training state
+                policy.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                start_epoch = checkpoint.get('epoch', 0) + 1
+                train_history = checkpoint.get('train_history', [])
+                validation_history = checkpoint.get('validation_history', [])
+                min_val_loss = checkpoint.get('min_val_loss', np.inf)
+                best_ckpt_info = checkpoint.get('best_ckpt_info', None)
+                print(f"Loaded full checkpoint from epoch {start_epoch-1}, min_val_loss: {min_val_loss}")
+            else:
+                # Just model weights
+                policy.load_state_dict(checkpoint)
+                print("Loaded model weights only (no training state)")
+        else:
+            print(f"Warning: Checkpoint file {resume_from_checkpoint} not found. Starting fresh training.")
+    
+    # Watch model with wandb
+    if use_wandb:
+        wandb.watch(policy, log="all", log_freq=100)
+    
+    for epoch in tqdm(range(start_epoch, num_epochs)):
         # validation
         with torch.inference_mode():
             policy.eval()
@@ -645,7 +662,18 @@ def train_bc(train_dataloader, val_dataloader, config):
 
         if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
-            torch.save(policy.state_dict(), ckpt_path)
+            # Save full checkpoint with training state
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': policy.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_history': train_history,
+                'validation_history': validation_history,
+                'min_val_loss': min_val_loss,
+                'best_ckpt_info': best_ckpt_info,
+                'config': config
+            }
+            torch.save(checkpoint, ckpt_path)
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed, use_wandb)
             
             # Log checkpoint as wandb artifact
@@ -711,7 +739,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
 
     # for ACT
-    # parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
+    parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
@@ -722,5 +750,8 @@ if __name__ == '__main__':
     parser.add_argument('--use_wandb', action='store', help='Enable wandb logging', required=False, default=True, type=bool)
     parser.add_argument('--wandb_project', action='store', type=str, help='wandb project name', default='vertebroplasty-imitation')
     parser.add_argument('--wandb_entity', action='store', type=str, help='wandb entity/username', default=None)
+    
+    # for resuming training
+    parser.add_argument('--resume_from_checkpoint', action='store', type=str, help='path to checkpoint to resume training from', default=None)
     
     main(vars(parser.parse_args()))
