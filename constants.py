@@ -4,8 +4,8 @@ import pathlib
 DATA_DIR = '/data2/flora'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
-        'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_2',
-        'num_episodes': 5000,
+        'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_custom_channels_xray_mask_heatmap',
+        'num_episodes': 2000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
@@ -16,8 +16,6 @@ SIM_TASK_CONFIGS = {
         'camera_names': ['top']
     },
 }
-
-ACTION_DIM = 3
 
 ### Simulation envs fixed constants
 DT = 0.02

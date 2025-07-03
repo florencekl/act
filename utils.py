@@ -40,7 +40,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
             image_dict = dict()
-            heatmap_dict = dict()
+            # heatmap_dict = dict()
             
             # Load annotations and projection matrices
             annotation_start = root['/annotations/start'][()]
@@ -51,7 +51,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             
             for cam_name in self.camera_names:
                 image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
-                heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
+                # heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
             # get all actions after and including start_ts
             if is_sim:
                 action = root['/action'][start_ts:]
@@ -70,13 +70,14 @@ class EpisodicDataset(torch.utils.data.Dataset):
         all_cam_images = []
         for cam_name in self.camera_names:
             img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-            heatmap = heatmap_dict[cam_name]  # Ensure float32
+            # heatmap = heatmap_dict[cam_name]  # Ensure float32
             # Ensure heatmap has shape (H, W), add channel dim
-            if heatmap.ndim == 2:
-                heatmap = heatmap[..., None]  # (H, W, 1)
+            # if heatmap.ndim == 2:
+            #     heatmap = heatmap[..., None]  # (H, W, 1)
             # Concatenate along channel axis (last axis)
-            img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
-            all_cam_images.append(img_with_heatmap)
+            # img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
+            # all_cam_images.append(img_with_heatmap)
+            all_cam_images.append(img)
             
             # TODO DEBUG if you want to visualize heatmaps and images that we use for training
             # from visualize_heatmaps import visualize_images_and_heatmaps

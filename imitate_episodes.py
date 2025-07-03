@@ -38,7 +38,7 @@ def main(args):
     batch_size_train = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
     batch_size_val = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
     num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
-    action_dim = args['action_dim'] if 'action_dim' in args else 11
+    action_dim = args['action_dim'] if 'action_dim' in args and args['action_dim'] is not None else 11
     
     # wandb parameters
     use_wandb = args.get('use_wandb', False)
@@ -76,11 +76,11 @@ def main(args):
                          'nheads': nheads,
                          'camera_names': camera_names,
                          'action_dim': action_dim,
-                         'input_channels': 4  # RGB + heatmap
+                         'input_channels': 3  # RGB + heatmap
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
-                         'camera_names': camera_names, 'action_dim': action_dim, 'input_channels': 4}
+                         'camera_names': camera_names, 'action_dim': action_dim, 'input_channels': 3}
     else:
         raise NotImplementedError
 
@@ -109,7 +109,7 @@ def main(args):
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_epoch_300_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_4300_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             filenames = [
@@ -130,11 +130,31 @@ def main(args):
         print()
         exit()
 
+
+    # --- Create a compact notes.md file in the checkpoint directory ---
+    import sys, datetime, pprint
+    os.makedirs(ckpt_dir, exist_ok=True)
+    sysinfo = dict(
+        python=platform.python_version(),
+        pytorch=torch.__version__,
+        cuda=torch.version.cuda if torch.cuda.is_available() else None,
+        gpu=torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        platform=platform.platform()
+    )
+    notes = f"""# Experiment Notes\n\n"""
+    notes += f"Date: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n"
+    notes += f"Command:\n```bash\npython3 {' '.join(sys.argv)}\n```\n"
+    notes += f"Task: {task_name}\nCkpt dir: {ckpt_dir}\nPolicy: {policy_class}\nSeed: {args['seed']}\nBatch size: {batch_size_train}/{batch_size_val}\nEpochs: {num_epochs}\nLR: {args['lr']}\nAction dim: {action_dim}\nCameras: {camera_names}\n"
+    notes += f"\nTask config:\n```\n{pprint.pformat(task_config)}\n```\n"
+    notes += f"Args:\n```\n{pprint.pformat(args)}\n```\n"
+    notes += f"System:\n```\n{pprint.pformat(sysinfo)}\n```\n"
+    with open(os.path.join(ckpt_dir, 'notes.md'), 'w') as f:
+        f.write(notes)
+
     # Initialize wandb for training
     if use_wandb:
         # Create run name with key parameters
         run_name = f"{policy_class}_{task_name}_lr{args['lr']}_bs{batch_size_train}_seed{args['seed']}"
-        
         wandb.init(
             project=wandb_project,
             entity=wandb_entity,
@@ -145,7 +165,6 @@ def main(args):
         )
         # Log the config as a table for easy viewing
         wandb.config.update(config)
-        
         # Create a table to track model architecture
         if policy_class == 'ACT':
             model_info = {
@@ -166,12 +185,10 @@ def main(args):
                 'action_dim': policy_config['action_dim'],
                 'input_channels': policy_config['input_channels']
             }
-        
         wandb.log({"model_architecture": wandb.Table(
             columns=list(model_info.keys()),
             data=[list(model_info.values())]
         )}, commit=False)
-        
         # Log system information
         system_info = {
             'python_version': platform.python_version(),
@@ -183,18 +200,15 @@ def main(args):
         }
         if torch.cuda.is_available():
             system_info['gpu_name'] = torch.cuda.get_device_name(0)
-        
         wandb.log({"system_info": wandb.Table(
             columns=list(system_info.keys()),
             data=[list(system_info.values())]
         )}, commit=False)
-        
         # Log task configuration
         wandb.log({"task_config": wandb.Table(
             columns=list(task_config.keys()),
             data=[list(task_config.values())]
         )}, commit=False)
-
         # Log command line arguments
         wandb.log({"args": wandb.Table(
             columns=list(args.keys()),
@@ -279,6 +293,8 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+    print(ckpt_path)
+    print(policy_config)
     policy = make_policy(policy_class, policy_config)
     loading_status = policy.load_state_dict(torch.load(ckpt_path))
     print(loading_status)
@@ -449,10 +465,10 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                 cannula_point = triangulate_point(cannula_ap, cannula_lateral, projection_matrices["ap"], projection_matrices["lateral"])
                 linear_point = triangulate_point(linear_ap, linear_lateral, projection_matrices["ap"], projection_matrices["lateral"])
 
-                ap_image = env.render_tools(
+                ap_image, _ = env.render_tools(
                     tool_poses={
-                        "cannula": (geo.point(cannula_point), geo.vector(direction)),
-                        "linear_drive": (geo.point(linear_point), geo.vector(direction)),
+                        "cannula": (geo.point(cannula_point), geo.vector(direction), True),
+                        "linear_drive": (geo.point(linear_point), geo.vector(direction), True),
                     },
                     view=ap_view,
                     rotation=0,
@@ -464,10 +480,10 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                 ap_projection = env.device.get_camera_projection()
                 
                 # Generate lateral image  
-                lateral_image = env.render_tools(
+                lateral_image, _ = env.render_tools(
                     tool_poses={
-                        "cannula": (geo.point(cannula_point), geo.vector(direction)),
-                        "linear_drive": (geo.point(linear_point), geo.vector(direction)),
+                        "cannula": (geo.point(cannula_point), geo.vector(direction), True),
+                        "linear_drive": (geo.point(linear_point), geo.vector(direction), True),
                     },
                     view=lateral_view,
                     rotation=0,
@@ -660,7 +676,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             
             wandb.log(log_dict, step=epoch)
 
-        if epoch % 100 == 0:
+        if epoch % 250 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             # Save full checkpoint with training state
             checkpoint = {

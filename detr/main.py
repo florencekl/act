@@ -64,6 +64,10 @@ def get_args_parser():
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
 
+    # for resuming training
+    parser.add_argument('--resume_from_checkpoint', action='store', type=str, help='path to checkpoint to resume training from', default=None)
+    parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
+    
     return parser
 
 
