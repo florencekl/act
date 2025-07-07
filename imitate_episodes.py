@@ -17,9 +17,11 @@ import platform
 import h5py
 
 from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
+from deepdrr_simulation_platform.sim_environment import centroid_heatmap
 from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
+from deepdrr.vol import Mesh
 
 from deepdrr_simulation_platform import generate_heatmap, load_config, SimulationEnvironment
 from deepdrr.utils import image_utils
@@ -113,13 +115,11 @@ def main(args):
         results = []
         for ckpt_name in ckpt_names:
             filenames = [
-                "/data2/flora/vertebroplasty_imitation_2/episode_5001.hdf5",
-                "/data2/flora/vertebroplasty_imitation_2/episode_5002.hdf5",
-                "/data2/flora/vertebroplasty_imitation_2/episode_5003.hdf5",
-                "/data2/flora/vertebroplasty_imitation_2/episode_5004.hdf5",
-                "/data2/flora/vertebroplasty_imitation_2/episode_5005.hdf5",
-                "/data2/flora/vertebroplasty_imitation_2/episode_5100.hdf5",
-                "/data2/flora/vertebroplasty_imitation_2/episode_5175.hdf5",
+                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2300.hdf5",
+                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2350.hdf5",
+                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2400.hdf5",
+                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2450.hdf5",
+                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2500.hdf5",
             ]
             for name in filenames:
                 success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, filename=name)
@@ -325,6 +325,7 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
 
     lateral_translation = file['device/lateral_translate'][()].item()
     superior_translation = file['device/superior_translate'][()].item()
+    source_to_detector_distance = file['device/source_to_detector_distance'][()].item()
     
     print(f"Case: {case}")
     print(f"Frames: {len(qpos_h5data)}")
@@ -340,9 +341,26 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     ct = env.load_phantom(phantom_path)
     print(f"Loading tools for case: {case}")
     tools = env.load_tools()
+    tag = cfg.paths.vertebra_directory \
+                    + "/" + file.attrs['case'] \
+                    + "/" + cfg.paths.vertebra_subfolder \
+                    + "/" + "body_" + os.path.split(os.path.dirname(file.attrs['annotation_path']))[-1]
+    
+    mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
+    env.tools[tag] = mesh
+    env.tools[tag].enabled = False
+    print(f"Loaded tag: {tag}")
     print(f"Initializing projector")
     env.initialize_projector()
-    
+
+    env.device.source_to_detector_distance = source_to_detector_distance
+
+    if "_R" in file.attrs['annotation_path']:
+                        rotation = 31 + 270
+    elif "_L" in file.attrs['annotation_path']:
+        rotation = 31 + 90
+    rotation = int(rotation + 30)
+
     # Create annotation object
     annotation = LineAnnotation(
         startpoint=geo.point(annotation_start[:3]),
@@ -388,11 +406,11 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
         with torch.inference_mode():
             # get observation at start_ts only
             image_dict = dict()
-            heatmap_dict = dict()
+            # heatmap_dict = dict()
             for cam_name in config['camera_names']:
                 image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
-                heatmap_dict[cam_name] = np.array(file[f'/observations/images/{cam_name}_heatmap'][()])
-                print(np.shape(heatmap_dict[cam_name]))
+                # heatmap_dict[cam_name] = np.array(file[f'/observations/images/{cam_name}_heatmap'][()])
+                # print(np.shape(heatmap_dict[cam_name]))
             
             # TODO get new starting qpos from the sim environment directly
             print(f"starting qpos: {qpos_h5data[starting_timestep]}")
@@ -403,13 +421,13 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                 all_cam_images = []
                 for cam_name in config['camera_names']:
                     img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-                    heatmap = heatmap_dict[cam_name]  # Ensure float32
+                    # heatmap = heatmap_dict[cam_name]  # Ensure float32
                     # Ensure heatmap has shape (H, W), add channel dim
-                    if heatmap.ndim == 2:
-                        heatmap = heatmap[..., None]  # (H, W, 1)
+                    # if heatmap.ndim == 2:
+                    #     heatmap = heatmap[..., None]  # (H, W, 1)
                     # Concatenate along channel axis (last axis)
-                    img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
-                    all_cam_images.append(img_with_heatmap)
+                    # img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
+                    all_cam_images.append(img)
                 all_cam_images = np.stack(all_cam_images, axis=0)
 
                 # construct observations
@@ -465,31 +483,39 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                 cannula_point = triangulate_point(cannula_ap, cannula_lateral, projection_matrices["ap"], projection_matrices["lateral"])
                 linear_point = triangulate_point(linear_ap, linear_lateral, projection_matrices["ap"], projection_matrices["lateral"])
 
-                ap_image, _ = env.render_tools(
+                ap_image, masks = env.render_tools(
                     tool_poses={
                         "cannula": (geo.point(cannula_point), geo.vector(direction), True),
                         "linear_drive": (geo.point(linear_point), geo.vector(direction), True),
+                        tag: (None, None, False),
                     },
                     view=ap_view,
-                    rotation=0,
+                    rotation=rotation,
                 )
-                # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
-                ap_processed = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
-                # print(np.shape(ap_processed), np.min(ap_processed), np.max(ap_processed))
+                ap_image = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
+                ap_processed = np.zeros_like(ap_image)
+                ap_processed[:, :, 0] = ap_image[:, :, 0]  # Use only the first channel
+                ap_processed[:, :, 1] = masks["cannula"][0]
+                ap_processed[:, :, 2] = (centroid_heatmap(masks[tag][0]) * 255).astype(np.uint8) # Use centroid heatmap for vertebra (centroid_heatmap(seg[0]) * 255).astype(np.uint8)
                 ap_images.append(ap_processed)
                 ap_projection = env.device.get_camera_projection()
                 
                 # Generate lateral image  
-                lateral_image, _ = env.render_tools(
+                lateral_image, masks = env.render_tools(
                     tool_poses={
                         "cannula": (geo.point(cannula_point), geo.vector(direction), True),
                         "linear_drive": (geo.point(linear_point), geo.vector(direction), True),
+                        tag: (None, None, False),
                     },
                     view=lateral_view,
-                    rotation=0,
+                    rotation=rotation,
                 )
-                lateral_processed = image_utils.process_drr(lateral_image, neglog=False, invert=False)
-                # print(np.shape(lateral_processed), np.min(lateral_processed), np.max(lateral_processed))
+                # TODO
+                lateral_image = image_utils.process_drr(lateral_image, neglog=False, invert=False)
+                lateral_processed = np.zeros_like(lateral_image)
+                lateral_processed[:, :, 0] = lateral_image[:, :, 0]  # Use only the first channel
+                lateral_processed[:, :, 1] = masks["cannula"][0]
+                lateral_processed[:, :, 2] = (centroid_heatmap(masks[tag][0]) * 255).astype(np.uint8) # Use centroid heatmap for vertebra (centroid_heatmap(seg[0]) * 255).astype(np.uint8)
                 lateral_images.append(lateral_processed)
                 lateral_projection = env.device.get_camera_projection()
 
@@ -511,62 +537,36 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
         print(f"AP image shape: {ap_images.shape}")
         print(f"Lateral image shape: {lateral_images.shape}")
         
+
         output_file = filename.replace('.hdf5', '_eval.hdf5')
-        
         output_file = os.path.join(config['ckpt_dir'], os.path.split(filename)[1])
-        # Save new HDF5 file
         print(f"Saving to: {output_file}")
-        
         with h5py.File(output_file, 'w') as new_f:
-            # Copy all original attributes
+            # ...existing code for writing new hdf5...
             for key in file.attrs.keys():
                 new_f.attrs[key] = file.attrs[key]
-            
-            # Mark as regenerated
             new_f.attrs['regenerated'] = True
-            
             qpos = np.array(qpos_history)
             qvel = np.vstack(([0] * 11, np.diff(qpos, axis=0)))
             qvel = qvel.tolist()
-            
-            # Copy observations
             new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
             obs_grp = new_f.create_group("observations")
             obs_grp.create_dataset("qpos", data=np.array(qpos, dtype=np.float32))
             obs_grp.create_dataset("qvel", data=np.array(qvel, dtype=np.float32))
-            
-            # Copy annotations
             anno_grp = new_f.create_group("annotations")
             anno_grp.create_dataset("start", data=np.array(annotation.startpoint.tolist()))
             anno_grp.create_dataset("end", data=np.array(annotation.endpoint.tolist()))
-            anno_grp.create_dataset("world_from_anatomical", data=file['annotations/world_from_anatomical'][:])
-            
-            # Add projection matrices
+            anno_grp.create_dataset("world_from_anatomical", data=np.array(ct.world_from_anatomical))
+            dev = new_f.create_group("device")
+            dev.create_dataset("source_to_detector_distance", data=env.device.source_to_detector_distance)
+            dev.create_dataset("superior_translate", data=superior_translation)
+            dev.create_dataset("lateral_translate", data=lateral_translation)
             proj_grp = obs_grp.create_group("projection_matrices")
             proj_grp.create_dataset("ap", data=np.array(ap_projection))
             proj_grp.create_dataset("lateral", data=np.array(lateral_projection))
-            
-            # Add regenerated images
             imgs_grp = obs_grp.create_group("images")
             imgs_grp.create_dataset("ap", data=ap_images)
             imgs_grp.create_dataset("lateral", data=lateral_images)
-
-            # TODO
-            imgs_grp.create_dataset("ap_heatmap", data=generate_heatmap(
-                annotation.startpoint.tolist(),
-                annotation.endpoint.tolist(),
-                np.array(ap_projection),
-                ap_images[0].shape[:2],  # (H, W)
-                np.array(ct.world_from_anatomical)
-            ))
-
-            imgs_grp.create_dataset("lateral_heatmap", data=generate_heatmap(
-                annotation.startpoint.tolist(),
-                annotation.endpoint.tolist(),
-                np.array(lateral_projection),
-                lateral_images[0].shape[:2],  # (H, W)
-                np.array(ct.world_from_anatomical)
-            ))
 
     return 0, 0
 
