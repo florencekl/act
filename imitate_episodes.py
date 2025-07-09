@@ -14,17 +14,12 @@ from einops import rearrange
 import wandb
 import platform
 
-import h5py
-
 from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
-from deepdrr_simulation_platform.sim_environment import centroid_heatmap
+from deepdrr_simulation_platform import EpisodeData, calculate_distances, load_config, SimulationEnvironment
 from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from deepdrr.vol import Mesh
-
-from deepdrr_simulation_platform import generate_heatmap, load_config, SimulationEnvironment
-from deepdrr.utils import image_utils
 
 import IPython
 e = IPython.embed
@@ -110,16 +105,16 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_epoch_4300_seed_0.ckpt']
+        # ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = [f'policy_epoch_1500_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             filenames = [
-                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2300.hdf5",
-                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2350.hdf5",
-                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2400.hdf5",
-                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2450.hdf5",
-                "/data2/flora/vertebroplasty_imitation_custom_channels_xray_mask_heatmap/episode_2500.hdf5",
+                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4300.hdf5",
+                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4350.hdf5",
+                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4400.hdf5",
+                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4450.hdf5",
+                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4500.hdf5",
             ]
             for name in filenames:
                 success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, filename=name)
@@ -275,28 +270,84 @@ def get_image(ts, camera_names):
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
+def initialize_environment_for_episode(episode):
+    """
+    Initializes the simulation environment, loads phantom, tools, mesh, and annotation for a given episode.
+    Returns: env, ct, tag, annotation, ap_view, lateral_view, rotation
+    """
+    cfg = load_config("/home/flora/projects/verteboplasty_imitation/deepdrr_simulation_platform/config.yaml")
+    env = SimulationEnvironment(cfg)
+
+    # Load phantom and tools
+    phantom_path = os.path.join(episode.phantoms_dir, episode.case)
+    print(f"Loading phantom from: {phantom_path}")
+    ct = env.load_phantom(phantom_path)
+    print(f"Loading tools for case: {episode.case}")
+    tools = env.load_tools()
+    tag = cfg.paths.vertebra_directory \
+        + "/" + episode.case \
+        + "/" + cfg.paths.vertebra_subfolder \
+        + "/" + "body_" + os.path.split(os.path.dirname(episode.annotation_path))[-1]
+
+    mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
+    env.tools[tag] = mesh
+    env.tools[tag].enabled = False
+    print(f"Loaded tag: {tag}")
+    print(f"Initializing projector")
+    env.initialize_projector()
+
+    env.device.source_to_detector_distance = episode.source_to_detector_distance
+
+    if "_R" in episode.annotation_path:
+        rotation = 31 + 270
+    elif "_L" in episode.annotation_path:
+        rotation = 31 + 90
+    else:
+        rotation = 31
+    rotation = int(rotation + 30)
+
+    # Create annotation object
+    annotation = LineAnnotation(
+        startpoint=geo.point(episode.start_point[:3]),
+        endpoint=geo.point(episode.end_point[:3]),
+        volume=ct,
+        world_from_anatomical=ct.world_from_anatomical,
+        anatomical_coordinate_system=ct.anatomical_coordinate_system
+    )
+
+    # Generate camera views
+    ap_view, lateral_view = env.generate_views(
+        annotation,
+        lateral_translate_ap=episode.lateral_translate_ap,
+        superior_translate_ap=episode.superior_translate_ap,
+        lateral_translate_lateral=episode.lateral_translate_lateral,
+        superior_translate_lateral=episode.superior_translate_lateral
+    )
+
+    env.device.source_to_detector_distance = episode.source_to_detector_distance
+
+    return env, ct, tag, annotation, ap_view, lateral_view, rotation
 
 
 def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
-    real_robot = config['real_robot']
     policy_class = config['policy_class']
-    onscreen_render = config['onscreen_render']
     policy_config = config['policy_config']
-    camera_names = config['camera_names']
     max_timesteps = config['episode_len']
-    task_name = config['task_name']
     temporal_agg = config['temporal_agg']
-    onscreen_cam = 'angle'
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
     print(ckpt_path)
     print(policy_config)
     policy = make_policy(policy_class, policy_config)
-    loading_status = policy.load_state_dict(torch.load(ckpt_path))
+    ckpt = torch.load(ckpt_path)
+    if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+        loading_status = policy.load_state_dict(ckpt['model_state_dict'])
+    else:
+        loading_status = policy.load_state_dict(ckpt)
     print(loading_status)
     policy.cuda()
     policy.eval()
@@ -308,74 +359,14 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     ### --- SETUP SIMULATION ENVIRONMENT --- ###
     if filename is None:
         filename = "/data2/flora/vertebroplasty_imitation_1/episode_5001.hdf5"
-    file = h5py.File(filename, 'r')
-    
-    # Load metadata
-    case = file.attrs['case']
-    phantoms_dir = file.attrs['phantoms_dir'] 
-    qpos_h5data = file['observations/qpos'][:]
-    
-    # Load annotation data
-    annotation_start = file['annotations/start'][:]
-    annotation_end = file['annotations/end'][:]
-    projection_matrices = {}
-    for cam_name in config['camera_names']:
-        projection_matrices[cam_name] = file[f'/observations/projection_matrices/{cam_name}'][:]
-    world_from_anatomical = file['annotations/world_from_anatomical'][:]
 
-    lateral_translation = file['device/lateral_translate'][()].item()
-    superior_translation = file['device/superior_translate'][()].item()
-    source_to_detector_distance = file['device/source_to_detector_distance'][()].item()
-    
-    print(f"Case: {case}")
-    print(f"Frames: {len(qpos_h5data)}")
-    print(f"QPos shape: {qpos_h5data.shape}")
-    
-    # Setup environment
-    cfg = load_config("/home/flora/projects/verteboplasty_imitation/deepdrr_simulation_platform/config.yaml")
-    env = SimulationEnvironment(cfg)
-    
-    # Load phantom and tools
-    phantom_path = os.path.join(phantoms_dir, case)
-    print(f"Loading phantom from: {phantom_path}")
-    ct = env.load_phantom(phantom_path)
-    print(f"Loading tools for case: {case}")
-    tools = env.load_tools()
-    tag = cfg.paths.vertebra_directory \
-                    + "/" + file.attrs['case'] \
-                    + "/" + cfg.paths.vertebra_subfolder \
-                    + "/" + "body_" + os.path.split(os.path.dirname(file.attrs['annotation_path']))[-1]
-    
-    mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
-    env.tools[tag] = mesh
-    env.tools[tag].enabled = False
-    print(f"Loaded tag: {tag}")
-    print(f"Initializing projector")
-    env.initialize_projector()
+    episode_original = EpisodeData.from_hdf5(filename)
 
-    env.device.source_to_detector_distance = source_to_detector_distance
+    print(f"Case: {episode_original.case}")
 
-    if "_R" in file.attrs['annotation_path']:
-                        rotation = 31 + 270
-    elif "_L" in file.attrs['annotation_path']:
-        rotation = 31 + 90
-    rotation = int(rotation + 30)
+    env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original)
 
-    # Create annotation object
-    annotation = LineAnnotation(
-        startpoint=geo.point(annotation_start[:3]),
-        endpoint=geo.point(annotation_end[:3]),
-        volume=ct,
-        world_from_anatomical=ct.world_from_anatomical,
-        # world_from_anatomical=kg.FrameTransform.identity(),
-        anatomical_coordinate_system=ct.anatomical_coordinate_system
-    )
-    
-    # Generate camera views
-    # TODO offset views by hdf...
-    ap_view, lateral_view = env.generate_views(annotation, lateral_translate=lateral_translation, superior_translate=superior_translation)
-    
-    env.device.source_to_detector_distance = file[f'device/source_to_detector_distance'][()].item()
+    # env.device.source_to_detector_distance is already set in the function
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
@@ -387,9 +378,10 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
 
     max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
 
-    num_rollouts = 1
+    num_rollouts = 20
+    regenerated_episodes = []
+    distances = []
     for rollout_id in range(num_rollouts):
-        rollout_id += 0
         lateral_images = []
         ap_images = []
         qpos_history = []
@@ -398,35 +390,24 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
         if temporal_agg:
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
-        # qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-
-        starting_timestep = rollout_id * 20
-        # max_timesteps = max_timesteps - starting_timestep
+        starting_timestep = 0
 
         with torch.inference_mode():
             # get observation at start_ts only
             image_dict = dict()
             # heatmap_dict = dict()
             for cam_name in config['camera_names']:
-                image_dict[cam_name] = file[f'/observations/images/{cam_name}'][starting_timestep]
-                # heatmap_dict[cam_name] = np.array(file[f'/observations/images/{cam_name}_heatmap'][()])
-                # print(np.shape(heatmap_dict[cam_name]))
-            
+                image_dict[cam_name] = episode_original.images[cam_name][starting_timestep]
+
             # TODO get new starting qpos from the sim environment directly
-            print(f"starting qpos: {qpos_h5data[starting_timestep]}")
-            qpos = torch.from_numpy(qpos_h5data[starting_timestep]).float().numpy()
+            print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
+            qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
 
             for t in range(max_timesteps):
                 # new axis for different cameras
                 all_cam_images = []
                 for cam_name in config['camera_names']:
                     img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-                    # heatmap = heatmap_dict[cam_name]  # Ensure float32
-                    # Ensure heatmap has shape (H, W), add channel dim
-                    # if heatmap.ndim == 2:
-                    #     heatmap = heatmap[..., None]  # (H, W, 1)
-                    # Concatenate along channel axis (last axis)
-                    # img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
                     all_cam_images.append(img)
                 all_cam_images = np.stack(all_cam_images, axis=0)
 
@@ -443,9 +424,7 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                 
                 qpos = pre_process(qpos)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-                # qpos_history[:, t] = qpos
 
-                # print(image_data.shape, qpos.shape, action_data.shape, is_pad.shape)
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
@@ -480,8 +459,8 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
 
                 # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
                 # print(direction)
-                cannula_point = triangulate_point(cannula_ap, cannula_lateral, projection_matrices["ap"], projection_matrices["lateral"])
-                linear_point = triangulate_point(linear_ap, linear_lateral, projection_matrices["ap"], projection_matrices["lateral"])
+                cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+                linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
 
                 ap_image, masks = env.render_tools(
                     tool_poses={
@@ -492,12 +471,8 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                     view=ap_view,
                     rotation=rotation,
                 )
-                ap_image = image_utils.process_drr(ap_image, neglog=False, invert=False, clahe=False)
-                ap_processed = np.zeros_like(ap_image)
-                ap_processed[:, :, 0] = ap_image[:, :, 0]  # Use only the first channel
-                ap_processed[:, :, 1] = masks["cannula"][0]
-                ap_processed[:, :, 2] = (centroid_heatmap(masks[tag][0]) * 255).astype(np.uint8) # Use centroid heatmap for vertebra (centroid_heatmap(seg[0]) * 255).astype(np.uint8)
-                ap_images.append(ap_processed)
+                
+                ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
                 ap_projection = env.device.get_camera_projection()
                 
                 # Generate lateral image  
@@ -510,19 +485,13 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
                     view=lateral_view,
                     rotation=rotation,
                 )
-                # TODO
-                lateral_image = image_utils.process_drr(lateral_image, neglog=False, invert=False)
-                lateral_processed = np.zeros_like(lateral_image)
-                lateral_processed[:, :, 0] = lateral_image[:, :, 0]  # Use only the first channel
-                lateral_processed[:, :, 1] = masks["cannula"][0]
-                lateral_processed[:, :, 2] = (centroid_heatmap(masks[tag][0]) * 255).astype(np.uint8) # Use centroid heatmap for vertebra (centroid_heatmap(seg[0]) * 255).astype(np.uint8)
-                lateral_images.append(lateral_processed)
+
+                lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
                 lateral_projection = env.device.get_camera_projection()
 
-                image_dict['ap'] = ap_processed
-                image_dict['lateral'] = lateral_processed
+                image_dict['ap'] = ap_images[-1]
+                image_dict['lateral'] = lateral_images[-1]
 
-                # print(f"target qpos: {target_qpos[:3]}")
                 qpos = target_qpos
 
                 qpos_history.append(qpos)
@@ -536,37 +505,40 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
         print(f"Generated {len(ap_images)} images")
         print(f"AP image shape: {ap_images.shape}")
         print(f"Lateral image shape: {lateral_images.shape}")
-        
 
-        output_file = filename.replace('.hdf5', '_eval.hdf5')
-        output_file = os.path.join(config['ckpt_dir'], os.path.split(filename)[1])
-        print(f"Saving to: {output_file}")
-        with h5py.File(output_file, 'w') as new_f:
-            # ...existing code for writing new hdf5...
-            for key in file.attrs.keys():
-                new_f.attrs[key] = file.attrs[key]
-            new_f.attrs['regenerated'] = True
-            qpos = np.array(qpos_history)
-            qvel = np.vstack(([0] * 11, np.diff(qpos, axis=0)))
-            qvel = qvel.tolist()
-            new_f.create_dataset("action", data=np.array(qpos, dtype=np.float32))
-            obs_grp = new_f.create_group("observations")
-            obs_grp.create_dataset("qpos", data=np.array(qpos, dtype=np.float32))
-            obs_grp.create_dataset("qvel", data=np.array(qvel, dtype=np.float32))
-            anno_grp = new_f.create_group("annotations")
-            anno_grp.create_dataset("start", data=np.array(annotation.startpoint.tolist()))
-            anno_grp.create_dataset("end", data=np.array(annotation.endpoint.tolist()))
-            anno_grp.create_dataset("world_from_anatomical", data=np.array(ct.world_from_anatomical))
-            dev = new_f.create_group("device")
-            dev.create_dataset("source_to_detector_distance", data=env.device.source_to_detector_distance)
-            dev.create_dataset("superior_translate", data=superior_translation)
-            dev.create_dataset("lateral_translate", data=lateral_translation)
-            proj_grp = obs_grp.create_group("projection_matrices")
-            proj_grp.create_dataset("ap", data=np.array(ap_projection))
-            proj_grp.create_dataset("lateral", data=np.array(lateral_projection))
-            imgs_grp = obs_grp.create_group("images")
-            imgs_grp.create_dataset("ap", data=ap_images)
-            imgs_grp.create_dataset("lateral", data=lateral_images)
+        qvel = np.vstack(([0] * 12, np.diff(qpos, axis=0)))
+        qvel = qvel.tolist()
+        
+        regenerated_episodes.append(env.create_episode_data(
+            case=episode_original.case,
+            annotation_path=episode_original.annotation_path,
+            line_annotation=annotation,
+            episode_number=episode_original.episode,
+            source_to_detector_distance=env.device.source_to_detector_distance,
+            superior_translate_ap=episode_original.superior_translate_ap,
+            lateral_translate_ap=episode_original.lateral_translate_ap,
+            superior_translate_lateral=episode_original.superior_translate_lateral,
+            lateral_translate_lateral=episode_original.lateral_translate_lateral,
+            projector_noise=episode_original.projector_noise,
+            photon_count=episode_original.photon_count,
+            qpos=np.array(qpos, dtype=np.float32),
+            qvel=np.array(qvel, dtype=np.float32),
+            ap_projection=ap_projection,
+            lateral_projection=lateral_projection,
+            ap_images=np.array(ap_images),
+            lateral_images=np.array(lateral_images)
+        ))
+
+        _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
+
+        distances.append(distance)
+    
+    print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
+    print(f"Distances: {distances}")
+
+    # Save episode data using the environment method
+    output_file = filename.replace('.hdf5', '_eval.hdf5')
+    env.save_episode(regenerated_episodes[np.argmin(distances)], config['ckpt_dir'], os.path.split(output_file)[1])
 
     return 0, 0
 
@@ -693,10 +665,10 @@ def train_bc(train_dataloader, val_dataloader, config):
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed, use_wandb)
             
             # Log checkpoint as wandb artifact
-            if use_wandb:
-                artifact = wandb.Artifact(f"checkpoint_epoch_{epoch}", type="model")
-                artifact.add_file(ckpt_path)
-                wandb.log_artifact(artifact)
+            # if use_wandb:
+                # artifact = wandb.Artifact(f"checkpoint_epoch_{epoch}", type="model")
+                # artifact.add_file(ckpt_path)
+                # wandb.log_artifact(artifact)
 
     ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
     torch.save(policy.state_dict(), ckpt_path)
