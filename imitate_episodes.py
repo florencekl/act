@@ -1,5 +1,6 @@
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+import csv
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
@@ -105,20 +106,12 @@ def main(args):
     }
 
     if is_eval:
-        # ckpt_names = [f'policy_best.ckpt']
-        ckpt_names = [f'policy_epoch_1500_seed_0.ckpt']
+        ckpt_names = [f'policy_best.ckpt']
+        # ckpt_names = [f'policy_epoch_1500_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            filenames = [
-                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4300.hdf5",
-                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4350.hdf5",
-                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4400.hdf5",
-                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4450.hdf5",
-                "/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_4500.hdf5",
-            ]
-            for name in filenames:
-                success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, filename=name)
-                results.append([ckpt_name, success_rate, avg_return])
+            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
             print(f'{ckpt_name}: {success_rate=} {avg_return=}')
@@ -270,19 +263,25 @@ def get_image(ts, camera_names):
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
-def initialize_environment_for_episode(episode):
+def initialize_environment_for_episode(episode, ct=None):
     """
     Initializes the simulation environment, loads phantom, tools, mesh, and annotation for a given episode.
     Returns: env, ct, tag, annotation, ap_view, lateral_view, rotation
     """
     cfg = load_config("/home/flora/projects/verteboplasty_imitation/deepdrr_simulation_platform/config.yaml")
     env = SimulationEnvironment(cfg)
-
-    # Load phantom and tools
-    phantom_path = os.path.join(episode.phantoms_dir, episode.case)
-    print(f"Loading phantom from: {phantom_path}")
-    ct = env.load_phantom(phantom_path)
-    print(f"Loading tools for case: {episode.case}")
+    
+    if ct is None:
+        # Load phantom and tools
+        phantom_path = os.path.join(episode.phantoms_dir, episode.case)
+        print(f"Loading phantom from: {phantom_path}")
+        ct = env.load_phantom(phantom_path)
+        print(f"Loading tools for case: {episode.case}")
+    else:
+        env.ct = ct
+        env.right_in_world = ct.world_from_anatomical @ kg.vector(1, 0, 0)
+        env.anterior_in_world = ct.world_from_anatomical @ kg.vector(0, 1, 0)
+        env.superior_in_world = ct.world_from_anatomical @ kg.vector(0, 0, 1)
     tools = env.load_tools()
     tag = cfg.paths.vertebra_directory \
         + "/" + episode.case \
@@ -315,13 +314,14 @@ def initialize_environment_for_episode(episode):
         anatomical_coordinate_system=ct.anatomical_coordinate_system
     )
 
+    print(f"{episode.lateral_translate_ap}, {episode.superior_translate_ap}, {episode.lateral_translate_lateral}, {episode.superior_translate_lateral}")
     # Generate camera views
     ap_view, lateral_view = env.generate_views(
         annotation,
-        lateral_translate_ap=episode.lateral_translate_ap,
-        superior_translate_ap=episode.superior_translate_ap,
-        lateral_translate_lateral=episode.lateral_translate_lateral,
-        superior_translate_lateral=episode.superior_translate_lateral
+        lateral_translate_ap=float(episode.lateral_translate_ap),
+        superior_translate_ap=float(episode.superior_translate_ap),
+        lateral_translate_lateral=float(episode.lateral_translate_lateral),
+        superior_translate_lateral=float(episode.superior_translate_lateral)        
     )
 
     env.device.source_to_detector_distance = episode.source_to_detector_distance
@@ -329,13 +329,14 @@ def initialize_environment_for_episode(episode):
     return env, ct, tag, annotation, ap_view, lateral_view, rotation
 
 
-def eval_bc(config, ckpt_name, save_episode=True, filename=None):
+def eval_bc(config, ckpt_name, save_episode=True):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
+    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -356,189 +357,209 @@ def eval_bc(config, ckpt_name, save_episode=True, filename=None):
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
 
-    ### --- SETUP SIMULATION ENVIRONMENT --- ###
-    if filename is None:
-        filename = "/data2/flora/vertebroplasty_imitation_1/episode_5001.hdf5"
-
-    episode_original = EpisodeData.from_hdf5(filename)
-
-    print(f"Case: {episode_original.case}")
-
-    env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original)
-
-    # env.device.source_to_detector_distance is already set in the function
-
-    pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
-    post_process = lambda a: a * stats['action_std'] + stats['action_mean']
-
-    query_frequency = policy_config['num_queries']
-    if temporal_agg:
-        query_frequency = 10
-        num_queries = policy_config['num_queries']
-
-    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
-
-    num_rollouts = 20
-    regenerated_episodes = []
-    distances = []
-    for rollout_id in range(num_rollouts):
-        lateral_images = []
-        ap_images = []
-        qpos_history = []
-
-        ### evaluation loop
-        if temporal_agg:
-            all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
-
-        starting_timestep = 0
-
-        with torch.inference_mode():
-            # get observation at start_ts only
-            image_dict = dict()
-            # heatmap_dict = dict()
-            for cam_name in config['camera_names']:
-                image_dict[cam_name] = episode_original.images[cam_name][starting_timestep]
-
-            # TODO get new starting qpos from the sim environment directly
-            print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
-            qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
-
-            for t in range(max_timesteps):
-                # new axis for different cameras
-                all_cam_images = []
-                for cam_name in config['camera_names']:
-                    img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-                    all_cam_images.append(img)
-                all_cam_images = np.stack(all_cam_images, axis=0)
-
-                # construct observations
-                image_data = torch.from_numpy(all_cam_images)
-
-                # channel last
-                image_data = torch.einsum('k h w c -> k c h w', image_data)
-
-                # normalize image and change dtype to float
-                image_data = image_data / 255.0
-
-                image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
-                
-                qpos = pre_process(qpos)
-                qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-
-                ### query policy
-                if config['policy_class'] == "ACT":
-                    if t % query_frequency == 0:
-                        all_actions = policy(qpos, image_data)
-                    if temporal_agg:
-                        all_time_actions[[t], t:t+num_queries] = all_actions
-                        actions_for_curr_step = all_time_actions[:, t]
-                        actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
-                        actions_for_curr_step = actions_for_curr_step[actions_populated]
-                        k = 0.01
-                        exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
-                        raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
-                    else:
-                        raw_action = all_actions[:, t % query_frequency]
-                elif config['policy_class'] == "CNNMLP":
-                    raw_action = policy(qpos, image_data)
-                else:
-                    raise NotImplementedError
-
-                ### post-process actions
-                raw_action = raw_action.squeeze(0).cpu().numpy()
-                action = post_process(raw_action)
-                target_qpos = action
-
-                cannula_ap = target_qpos[:2]
-                cannula_lateral = target_qpos[2:4]
-                linear_ap = target_qpos[4:6]
-                linear_lateral = target_qpos[6:8]
-                direction = target_qpos[8:11]
-
-                # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
-                # print(direction)
-                cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-                linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-
-                ap_image, masks = env.render_tools(
-                    tool_poses={
-                        "cannula": (geo.point(cannula_point), geo.vector(direction), True),
-                        "linear_drive": (geo.point(linear_point), geo.vector(direction), True),
-                        tag: (None, None, False),
-                    },
-                    view=ap_view,
-                    rotation=rotation,
-                )
-                
-                ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
-                ap_projection = env.device.get_camera_projection()
-                
-                # Generate lateral image  
-                lateral_image, masks = env.render_tools(
-                    tool_poses={
-                        "cannula": (geo.point(cannula_point), geo.vector(direction), True),
-                        "linear_drive": (geo.point(linear_point), geo.vector(direction), True),
-                        tag: (None, None, False),
-                    },
-                    view=lateral_view,
-                    rotation=rotation,
-                )
-
-                lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
-                lateral_projection = env.device.get_camera_projection()
-
-                image_dict['ap'] = ap_images[-1]
-                image_dict['lateral'] = lateral_images[-1]
-
-                qpos = target_qpos
-
-                qpos_history.append(qpos)
-
-        # Convert to numpy arrays
-        ap_images = np.array(ap_images)
-        print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
-        lateral_images = np.array(lateral_images)
-        print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
-        
-        print(f"Generated {len(ap_images)} images")
-        print(f"AP image shape: {ap_images.shape}")
-        print(f"Lateral image shape: {lateral_images.shape}")
-
-        qvel = np.vstack(([0] * 12, np.diff(qpos, axis=0)))
-        qvel = qvel.tolist()
-        
-        regenerated_episodes.append(env.create_episode_data(
-            case=episode_original.case,
-            annotation_path=episode_original.annotation_path,
-            line_annotation=annotation,
-            episode_number=episode_original.episode,
-            source_to_detector_distance=env.device.source_to_detector_distance,
-            superior_translate_ap=episode_original.superior_translate_ap,
-            lateral_translate_ap=episode_original.lateral_translate_ap,
-            superior_translate_lateral=episode_original.superior_translate_lateral,
-            lateral_translate_lateral=episode_original.lateral_translate_lateral,
-            projector_noise=episode_original.projector_noise,
-            photon_count=episode_original.photon_count,
-            qpos=np.array(qpos, dtype=np.float32),
-            qvel=np.array(qvel, dtype=np.float32),
-            ap_projection=ap_projection,
-            lateral_projection=lateral_projection,
-            ap_images=np.array(ap_images),
-            lateral_images=np.array(lateral_images)
-        ))
-
-        _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
-
-        distances.append(distance)
     
-    print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
-    print(f"Distances: {distances}")
+    files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4001, 4101)]
+    episode_previous = None
+    distances = []
+    for filename in files:
+        ### --- SETUP SIMULATION ENVIRONMENT --- ###
+        if filename is None:
+            filename = "/data2/flora/vertebroplasty_imitation_1/episode_5001.hdf5"
 
-    # Save episode data using the environment method
-    output_file = filename.replace('.hdf5', '_eval.hdf5')
-    env.save_episode(regenerated_episodes[np.argmin(distances)], config['ckpt_dir'], os.path.split(output_file)[1])
+        episode_original = EpisodeData.from_hdf5(filename)
+
+        print(f"Case: {episode_original.case}")
+
+        if episode_previous is not None and episode_previous.case == episode_original.case and ct is not None:
+            env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original, ct=ct)
+        else:
+            env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original)
+
+        # env.device.source_to_detector_distance is already set in the function
+
+        pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
+        post_process = lambda a: a * stats['action_std'] + stats['action_mean']
+
+        query_frequency = policy_config['num_queries']
+        if temporal_agg:
+            query_frequency = 10
+            num_queries = policy_config['num_queries']
+
+        num_rollouts = 1
+        for rollout_id in range(num_rollouts):
+            regenerated_episodes = []
+            set_seed(rollout_id)
+            print(f"Rollout {rollout_id+1}/{num_rollouts}")
+            lateral_images = []
+            ap_images = []
+            qpos_history = []
+
+            ### evaluation loop
+            if temporal_agg:
+                all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
+
+            starting_timestep = 0
+
+            with torch.inference_mode():
+                # get observation at start_ts only
+                image_dict = dict()
+                # heatmap_dict = dict()
+                for cam_name in config['camera_names']:
+                    image_dict[cam_name] = episode_original.images[cam_name][starting_timestep]
+
+                # TODO get new starting qpos from the sim environment directly
+                print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
+                qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
+                
+                for t in tqdm(range(max_timesteps), desc="Timesteps"):
+                    # new axis for different cameras
+                    all_cam_images = []
+                    for cam_name in config['camera_names']:
+                        img = image_dict[cam_name].astype(np.float32)  # Ensure float32
+                        all_cam_images.append(img)
+                    all_cam_images = np.stack(all_cam_images, axis=0)
+
+                    # construct observations
+                    image_data = torch.from_numpy(all_cam_images)
+
+                    # channel last
+                    image_data = torch.einsum('k h w c -> k c h w', image_data)
+
+                    # normalize image and change dtype to float
+                    image_data = image_data / 255.0
+
+                    image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
+                    
+                    qpos = pre_process(qpos)
+                    qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
+
+                    ### query policy
+                    if config['policy_class'] == "ACT":
+                        if t % query_frequency == 0:
+                            all_actions = policy(qpos, image_data)
+                        if temporal_agg:
+                            all_time_actions[[t], t:t+num_queries] = all_actions
+                            actions_for_curr_step = all_time_actions[:, t]
+                            actions_populated = torch.all(actions_for_curr_step != 0, axis=1)
+                            actions_for_curr_step = actions_for_curr_step[actions_populated]
+                            k = 0.01
+                            exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+                            exp_weights = exp_weights / exp_weights.sum()
+                            exp_weights = torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
+                            raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True)
+                        else:
+                            raw_action = all_actions[:, t % query_frequency]
+                    elif config['policy_class'] == "CNNMLP":
+                        raw_action = policy(qpos, image_data)
+                    else:
+                        raise NotImplementedError
+
+                    ### post-process actions
+                    raw_action = raw_action.squeeze(0).cpu().numpy()
+                    action = post_process(raw_action)
+                    target_qpos = action
+
+                    cannula_ap = target_qpos[:2]
+                    cannula_lateral = target_qpos[2:4]
+                    linear_ap = target_qpos[4:6]
+                    linear_lateral = target_qpos[6:8]
+                    direction = target_qpos[8:11]
+
+                    # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
+                    # print(direction)
+                    cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+                    linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+                    
+                    cannula_point_direction = cannula_point + geo.vector(direction).hat() * 10
+                    linear_point_direction = linear_point + geo.vector(direction).hat() * 10
+
+                    ap_image, masks = env.render_tools(
+                        tool_poses={
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
+                            tag: (None, None, False),
+                        },
+                        view=ap_view,
+                        rotation=rotation,
+                    )
+                    
+                    ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
+                    ap_projection = env.device.get_camera_projection()
+                    
+                    # Generate lateral image  
+                    lateral_image, masks = env.render_tools(
+                        tool_poses={
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
+                            tag: (None, None, False),
+                        },
+                        view=lateral_view,
+                        rotation=rotation,
+                    )
+
+                    lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
+                    lateral_projection = env.device.get_camera_projection()
+
+                    image_dict['ap'] = ap_images[-1]
+                    image_dict['lateral'] = lateral_images[-1]
+
+                    qpos = target_qpos
+
+                    qpos_history.append(qpos)
+                    # print(qpos)
+
+            # Convert to numpy arrays
+            ap_images = np.array(ap_images)
+            print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
+            lateral_images = np.array(lateral_images)
+            print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
+            
+            print(f"Generated {len(ap_images)} images")
+            print(f"AP image shape: {ap_images.shape}")
+            print(f"Lateral image shape: {lateral_images.shape}")
+
+            qvel = np.vstack(([0] * 11, np.diff(qpos_history, axis=0)))
+            qvel = qvel.tolist()
+            
+            regenerated_episodes.append(EpisodeData.create_episode_data(
+                case=episode_original.case,
+                phantoms_dir=episode_original.phantoms_dir,
+                anatomical_coordinate_system=episode_original.anatomical_coordinate_system,
+                world_from_anatomical=episode_original.world_from_anatomical,
+                annotation_path=episode_original.annotation_path,
+                line_annotation=annotation,
+                episode_number=episode_original.episode,
+                source_to_detector_distance=env.device.source_to_detector_distance,
+                superior_translate_ap=episode_original.superior_translate_ap,
+                lateral_translate_ap=episode_original.lateral_translate_ap,
+                superior_translate_lateral=episode_original.superior_translate_lateral,
+                lateral_translate_lateral=episode_original.lateral_translate_lateral,
+                projector_noise=episode_original.noise,
+                photon_count=episode_original.photon_count,
+                qpos=np.array(qpos_history, dtype=np.float32),
+                qvel=np.array(qvel, dtype=np.float32),
+                ap_projection=ap_projection,
+                lateral_projection=lateral_projection,
+                ap_images=np.array(ap_images),
+                lateral_images=np.array(lateral_images)
+            ))
+
+            _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
+
+            print(f"Distance for rollout {rollout_id+1}: {distance}")
+
+            distances.append(distance)
+            csv_file = os.path.join(config['ckpt_dir'], "episode_distances.csv")
+            with open(csv_file, "a", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([episode_original.episode, distance])
+        
+        # print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
+        # print(f"Distances: {distances}")
+
+        env.save_episode(regenerated_episodes[np.argmin(distances)], config['ckpt_dir'], episode_original.episode)
+
+        episode_previous = episode_original
 
     return 0, 0
 

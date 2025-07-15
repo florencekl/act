@@ -1,7 +1,7 @@
 import pathlib
 
 ### Task parameters
-DATA_DIR = '/data2/flora'
+DATA_DIR = '/data2/flora/vertebroplasty_data'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
         'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed',
