@@ -9,11 +9,11 @@ SIM_TASK_CONFIGS = {
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
-    'sim_test': {
-        'dataset_dir': DATA_DIR + '/../../data/inputs/test_input',
-        'num_episodes': 2,
-        'episode_len': 400,
-        'camera_names': ['top']
+    'sim_vertebroplasty_full_2D': {
+        'dataset_dir': DATA_DIR + '/custom_channels_projector_noise_scatter_action_12',
+        'num_episodes': 4000,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral']
     },
 }
 

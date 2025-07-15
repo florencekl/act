@@ -359,7 +359,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     
     files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4001, 4101)]
+    files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
     episode_previous = None
+    ct = None
     distances = []
     for filename in files:
         ### --- SETUP SIMULATION ENVIRONMENT --- ###
@@ -373,6 +375,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         if episode_previous is not None and episode_previous.case == episode_original.case and ct is not None:
             env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original, ct=ct)
         else:
+            del ct
             env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original)
 
         # env.device.source_to_detector_distance is already set in the function
@@ -556,10 +559,14 @@ def eval_bc(config, ckpt_name, save_episode=True):
         
         # print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
         # print(f"Distances: {distances}")
-
-        env.save_episode(regenerated_episodes[np.argmin(distances)], config['ckpt_dir'], episode_original.episode)
+        regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
+        os.makedirs(regenerated_folder, exist_ok=True)
+        env.save_episode(regenerated_episodes[-1], regenerated_folder, episode_original.episode)
 
         episode_previous = episode_original
+
+        del env, tag, annotation, ap_view, lateral_view, rotation
+        
 
     return 0, 0
 
