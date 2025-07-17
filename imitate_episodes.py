@@ -33,10 +33,10 @@ def main(args):
     policy_class = args['policy_class'] if 'policy_class' in args else 'ACT'
     onscreen_render = args['onscreen_render']
     task_name = args['task_name']
-    batch_size_train = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
-    batch_size_val = args['batch_size'] if 'batch_size' in args else 8 # batch size should be smaller than the number of recorded actions
-    num_epochs = args['num_epochs'] if 'num_epochs' in args else 1000
-    action_dim = args['action_dim'] if 'action_dim' in args and args['action_dim'] is not None else 11
+    batch_size_train = args['batch_size']
+    batch_size_val = args['batch_size']
+    num_epochs = args['num_epochs']
+    action_dim = args['action_dim']
     
     # wandb parameters
     use_wandb = args.get('use_wandb', False)
@@ -102,6 +102,7 @@ def main(args):
         'batch_size_train': batch_size_train,
         'batch_size_val': batch_size_val,
         'num_episodes': num_episodes,
+        'action_dim': action_dim,
         'resume_from_checkpoint': args.get('resume_from_checkpoint', None)
     }
 
@@ -110,7 +111,7 @@ def main(args):
         # ckpt_names = [f'policy_epoch_1500_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=dataset_dir)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -273,9 +274,9 @@ def initialize_environment_for_episode(episode, ct=None):
     
     if ct is None:
         # Load phantom and tools
-        phantom_path = os.path.join(episode.phantoms_dir, episode.case)
+        phantom_path = os.path.join(episode.phantoms_dir, episode.case, 'TORSO')
         print(f"Loading phantom from: {phantom_path}")
-        ct = env.load_phantom(phantom_path)
+        ct = env.load_phantom(phantom_path, from_density=True)
         print(f"Loading tools for case: {episode.case}")
     else:
         env.ct = ct
@@ -295,7 +296,8 @@ def initialize_environment_for_episode(episode, ct=None):
     print(f"Initializing projector")
     env.initialize_projector()
 
-    env.device.source_to_detector_distance = episode.source_to_detector_distance
+    print(episode.source_to_detector_distance[0])
+    env.device.source_to_detector_distance = int(episode.source_to_detector_distance[0])
 
     if "_R" in episode.annotation_path:
         rotation = 31 + 270
@@ -318,18 +320,18 @@ def initialize_environment_for_episode(episode, ct=None):
     # Generate camera views
     ap_view, lateral_view = env.generate_views(
         annotation,
-        lateral_translate_ap=float(episode.lateral_translate_ap),
-        superior_translate_ap=float(episode.superior_translate_ap),
-        lateral_translate_lateral=float(episode.lateral_translate_lateral),
-        superior_translate_lateral=float(episode.superior_translate_lateral)        
+        lateral_translate_ap=episode.lateral_translate_ap[0],
+        superior_translate_ap=episode.superior_translate_ap[0],
+        lateral_translate_lateral=episode.lateral_translate_lateral[0],
+        superior_translate_lateral=episode.superior_translate_lateral[0]
     )
 
-    env.device.source_to_detector_distance = episode.source_to_detector_distance
+    # env.device.source_to_detector_distance = episode.source_to_detector_distance
 
     return env, ct, tag, annotation, ap_view, lateral_view, rotation
 
 
-def eval_bc(config, ckpt_name, save_episode=True):
+def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
@@ -358,8 +360,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
         stats = pickle.load(f)
 
     
-    files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4001, 4101)]
-    files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
+    # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4001, 4101)]
+    # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
+    # files = [f"/data2/flora/vertebroplasty_data/custom_channels_projector_noise_scatter_action_12/episode_{i}.hdf5" for i in range(4001, 4101)]
+    if dataset_dir is not None:
+        files = [f"{dataset_dir}/episode_{i}.hdf5" for i in range(config['num_episodes'] + 1, config['num_episodes'] + 101)]
     episode_previous = None
     ct = None
     distances = []
@@ -466,20 +471,28 @@ def eval_bc(config, ckpt_name, save_episode=True):
                     cannula_lateral = target_qpos[2:4]
                     linear_ap = target_qpos[4:6]
                     linear_lateral = target_qpos[6:8]
-                    direction = target_qpos[8:11]
+
+                    cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+                    linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+
+                    if config['action_dim'] == 11:
+                        direction = target_qpos[8:11]
+                    else:
+                        direction_ap = target_qpos[8:10]
+                        direction_lateral = target_qpos[10:12]
+                        direction_point = triangulate_point(direction_ap, direction_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+                        direction = direction_point - cannula_point
 
                     # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
                     # print(direction)
-                    cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-                    linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
                     
                     cannula_point_direction = cannula_point + geo.vector(direction).hat() * 10
                     linear_point_direction = linear_point + geo.vector(direction).hat() * 10
 
                     ap_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), False),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
                         view=ap_view,
@@ -492,8 +505,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
                     # Generate lateral image  
                     lateral_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), False),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
                         view=lateral_view,
@@ -521,7 +534,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
             print(f"AP image shape: {ap_images.shape}")
             print(f"Lateral image shape: {lateral_images.shape}")
 
-            qvel = np.vstack(([0] * 11, np.diff(qpos_history, axis=0)))
+            qvel = np.vstack(([0] * config['action_dim'], np.diff(qpos_history, axis=0)))
             qvel = qvel.tolist()
             
             regenerated_episodes.append(EpisodeData.create_episode_data(
@@ -755,11 +768,11 @@ if __name__ == '__main__':
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
 
     # for ACT
-    parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
-    parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
-    parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
-    parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
-    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=True)
+    parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=True)
+    parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=True)
+    parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=True)
+    parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=True)
     parser.add_argument('--temporal_agg', action='store_true')
     
     # for wandb logging

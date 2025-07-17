@@ -15,6 +15,18 @@ SIM_TASK_CONFIGS = {
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
+    'sim_vertebroplasty_11_action_noise_screw_no_robot': {
+        'dataset_dir': DATA_DIR + '/custom_channels_projector_scatter_action_11',
+        'num_episodes': 4000,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral']
+    },
+    'sim_vertebroplasty_11_no_robot': {
+        'dataset_dir': DATA_DIR + '/action_11_neglog_xray_only_noise',
+        'num_episodes': 100,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral']
+    },
 }
 
 ### Simulation envs fixed constants
