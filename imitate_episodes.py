@@ -17,6 +17,7 @@ import platform
 
 from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
 from deepdrr_simulation_platform import EpisodeData, calculate_distances, load_config, SimulationEnvironment
+from deepdrr_simulation_platform.sim_environment import centroid_heatmap
 from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
@@ -50,6 +51,7 @@ def main(args):
     task_config = SIM_TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
     num_episodes = task_config['num_episodes']
+    episodes_start = task_config['episode_start']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
 
@@ -102,6 +104,7 @@ def main(args):
         'batch_size_train': batch_size_train,
         'batch_size_val': batch_size_val,
         'num_episodes': num_episodes,
+        'episodes_start': episodes_start,
         'action_dim': action_dim,
         'resume_from_checkpoint': args.get('resume_from_checkpoint', None)
     }
@@ -204,7 +207,7 @@ def main(args):
             data=[list(args.values())]
         )}, commit=False)
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -264,7 +267,7 @@ def get_image(ts, camera_names):
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
-def initialize_environment_for_episode(episode, ct=None):
+def initialize_environment_for_episode(episode: EpisodeData, ct=None):
     """
     Initializes the simulation environment, loads phantom, tools, mesh, and annotation for a given episode.
     Returns: env, ct, tag, annotation, ap_view, lateral_view, rotation
@@ -324,15 +327,23 @@ def initialize_environment_for_episode(episode, ct=None):
 
     env.randomize_background(annotation.startpoint_in_world)
 
-    print(f"{episode.lateral_translate_ap}, {episode.superior_translate_ap}, {episode.lateral_translate_lateral}, {episode.superior_translate_lateral}")
+    # print(f"{episode.lateral_translate_ap}, {episode.superior_translate_ap}, {episode.lateral_translate_lateral}, {episode.superior_translate_lateral}")
     # Generate camera views
-    ap_view, lateral_view = env.generate_views(
-        annotation,
-        lateral_translate_ap=episode.lateral_translate_ap[0],
-        superior_translate_ap=episode.superior_translate_ap[0],
-        lateral_translate_lateral=episode.lateral_translate_lateral[0],
-        superior_translate_lateral=episode.superior_translate_lateral[0]
-    )
+    # TODO this needs to be
+    if episode.ap_direction is None:
+        ap_view, lateral_view = env.generate_views(
+            annotation,
+            env.anterior_in_world,
+            ap_translations=episode.ap_translations,
+            lateral_translations=episode.lateral_translations
+        )
+    else:
+        ap_view, lateral_view = env.generate_views(
+            annotation,
+            episode.ap_direction,
+            ap_translations=episode.ap_translations,
+            lateral_translations=episode.lateral_translations
+        )
 
     # env.device.source_to_detector_distance = episode.source_to_detector_distance
 
@@ -367,8 +378,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
 
-    
-    # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4001, 4101)]
+
+    files = [f"/data/flora/vertebroplasty_data/NMDID_subclustering_v1/episode_{i}.hdf5" for i in range(400, 500)]
     # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
     # files = [f"/data2/flora/vertebroplasty_data/custom_channels_projector_noise_scatter_action_12/episode_{i}.hdf5" for i in range(4001, 4101)]
     if dataset_dir is not None:
@@ -407,7 +418,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             set_seed(rollout_id)
             print(f"Rollout {rollout_id+1}/{num_rollouts}")
             lateral_images = []
+            lateral_masks = []
+            lateral_heatmap= None
             ap_images = []
+            ap_masks = []
+            ap_heatmap= None
             qpos_history = []
 
             ### evaluation loop
@@ -421,7 +436,16 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 image_dict = dict()
                 # heatmap_dict = dict()
                 for cam_name in config['camera_names']:
-                    image_dict[cam_name] = episode_original.images[cam_name][starting_timestep]
+                    heatmap_repeated = np.repeat(
+                        episode_original.heatmaps[cam_name][..., np.newaxis],
+                        episode_original.images[cam_name].shape[-1],
+                        axis=2
+                    )
+                    image_dict[cam_name] = np.concatenate([
+                        episode_original.images[cam_name],
+                        episode_original.masks[cam_name],
+                        heatmap_repeated
+                    ], axis=2)
 
                 # TODO get new starting qpos from the sim environment directly
                 print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
@@ -506,8 +530,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         view=ap_view,
                         rotation=rotation,
                     )
+
+                    ap_images.append(ap_image)
+                    ap_masks.append(masks["cannula"][0])
+                    ap_heatmap = (centroid_heatmap(masks[tag][0]))
                     
-                    ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
+                    # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
                     ap_projection = env.device.get_camera_projection()
                     
                     # Generate lateral image  
@@ -520,12 +548,16 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         view=lateral_view,
                         rotation=rotation,
                     )
+                    
+                    lateral_images.append(lateral_image)
+                    lateral_masks.append(masks["cannula"][0])
+                    lateral_heatmap = (centroid_heatmap(masks[tag][0]))
 
-                    lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
+                    # lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
                     lateral_projection = env.device.get_camera_projection()
 
-                    image_dict['ap'] = ap_images[-1]
-                    image_dict['lateral'] = lateral_images[-1]
+                    image_dict['ap'] = np.array([ap_images[-1], ap_masks[-1], ap_heatmap]).transpose(1, 2, 0)
+                    image_dict['lateral'] = np.array([lateral_images[-1], lateral_masks[-1], lateral_heatmap]).transpose(1, 2, 0)
 
                     qpos = target_qpos
 
@@ -554,10 +586,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 line_annotation=annotation,
                 episode_number=episode_original.episode,
                 source_to_detector_distance=env.device.source_to_detector_distance,
-                superior_translate_ap=episode_original.superior_translate_ap,
-                lateral_translate_ap=episode_original.lateral_translate_ap,
-                superior_translate_lateral=episode_original.superior_translate_lateral,
-                lateral_translate_lateral=episode_original.lateral_translate_lateral,
+                ap_translations=episode_original.ap_translations,
+                lateral_translations=episode_original.lateral_translations,
                 projector_noise=episode_original.noise,
                 photon_count=episode_original.photon_count,
                 qpos=np.array(qpos_history, dtype=np.float32),
@@ -565,7 +595,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 ap_projection=ap_projection,
                 lateral_projection=lateral_projection,
                 ap_images=np.array(ap_images),
-                lateral_images=np.array(lateral_images)
+                lateral_images=np.array(lateral_images),
+                lateral_masks=np.array(lateral_masks),
+                ap_masks=np.array(ap_masks),
+                ap_heatmaps=np.array(ap_heatmap),
+                lateral_heatmaps=np.array(lateral_heatmap),
             ))
 
             _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
@@ -731,7 +765,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     ckpt_path = os.path.join(ckpt_dir, f'policy_best_full_state.ckpt')
     checkpoint = {
         'epoch': best_epoch,
-        'model_state_dict': best_state_dict,
+        'model_state_dict': policy.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'train_history': train_history,
         'validation_history': validation_history,

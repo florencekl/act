@@ -3,15 +3,28 @@ import torch
 import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
+import glob
 
 import IPython
 import time
 e = IPython.embed
 
+def discover_episode_files(dataset_dir, num_episodes=None, episodes_start=None):
+    """Discover all HDF5 files in the dataset directory."""
+    pattern = os.path.join(dataset_dir, "*.hdf5")
+    hdf5_files = glob.glob(pattern)
+    # Return just the filenames without the full path
+    episode_files = [os.path.basename(f) for f in hdf5_files]
+    if episodes_start is not None:
+        episode_files = episode_files[episodes_start:]  # Limit to episodes_start if specified
+    if num_episodes is not None:
+        episode_files = episode_files[:num_episodes]  # Limit to num_episodes if specified
+    return sorted(episode_files)  # Sort for reproducible order
+
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats):
+    def __init__(self, episode_files, dataset_dir, camera_names, norm_stats):
         super(EpisodicDataset).__init__()
-        self.episode_ids = episode_ids
+        self.episode_files = episode_files  # List of filenames
         self.dataset_dir = dataset_dir
         self.camera_names = camera_names
         self.norm_stats = norm_stats
@@ -19,13 +32,13 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.__getitem__(0) # initialize self.is_sim
 
     def __len__(self):
-        return len(self.episode_ids)
+        return len(self.episode_files)
 
     def __getitem__(self, index):
         sample_full_episode = False # hardcode
 
-        episode_id = self.episode_ids[index]
-        dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
+        episode_filename = self.episode_files[index]
+        dataset_path = os.path.join(self.dataset_dir, episode_filename)
         with h5py.File(dataset_path, 'r') as root:
             is_sim = root.attrs['sim']
             original_action_shape = root['/action'].shape
@@ -50,7 +63,18 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 projection_matrices[cam_name] = root[f'/observations/projection_matrices/{cam_name}'][()]
             
             for cam_name in self.camera_names:
-                image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
+                # TODO
+                images = root[f'/observations/images/{cam_name}'][start_ts]
+                shape = root[f'/observations/masks/{cam_name}'].attrs["original_shape"]
+                masks = np.unpackbits(root[f'/observations/masks/{cam_name}'][:])[:np.prod(shape)].reshape(shape)[start_ts]
+                heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
+                image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
+                # TODO create PIL rgb image from FULL DICTIONRAY ENTRY * 255 to uint8
+                # from PIL import Image
+                # img = Image.fromarray((image_dict[cam_name] * 255).astype(np.uint8), mode='RGB')
+                # img.save(f'/data/flora/vertebroplasty_training/NMDID_v1_11_action_pretraining/{cam_name}_image.png')
+
+
                 # heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
             # get all actions after and including start_ts
             if is_sim:
@@ -101,11 +125,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
         return image_data, qpos_data, action_data, is_pad
 
 
-def get_norm_stats(dataset_dir, num_episodes):
+def get_norm_stats(dataset_dir, episode_files):
     all_qpos_data = []
     all_action_data = []
-    for episode_idx in range(num_episodes):
-        dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
+    for episode_filename in episode_files:
+        dataset_path = os.path.join(dataset_dir, episode_filename)
         with h5py.File(dataset_path, 'r') as root:
             qpos = root['/observations/qpos'][()]
             qvel = root['/observations/qvel'][()]
@@ -133,20 +157,33 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val):
+def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val):
     print(f'\nData from: {dataset_dir}\n')
+    
+    # Discover all HDF5 files in the dataset directory
+    episode_files = discover_episode_files(dataset_dir, num_episodes, episodes_start)
+    num_episodes = len(episode_files)
+    print(f'Found {num_episodes} episode files: {episode_files[:5]}{"..." if num_episodes > 5 else ""}')
+    
+    if num_episodes == 0:
+        raise ValueError(f"No HDF5 files found in {dataset_dir}")
+    
     # obtain train test split
     train_ratio = 0.8
     shuffled_indices = np.random.permutation(num_episodes)
     train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     val_indices = shuffled_indices[int(train_ratio * num_episodes):]
+    
+    # Split episode files based on indices
+    train_files = [episode_files[i] for i in train_indices]
+    val_files = [episode_files[i] for i in val_indices]
 
     # obtain normalization stats for qpos and action
-    norm_stats = get_norm_stats(dataset_dir, num_episodes)
+    norm_stats = get_norm_stats(dataset_dir, episode_files)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats)
+    train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
+    val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=16, prefetch_factor=4)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=16, prefetch_factor=4)
 

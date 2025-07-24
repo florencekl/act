@@ -2,28 +2,47 @@ import pathlib
 
 ### Task parameters
 DATA_DIR = '/data2/flora/vertebroplasty_data'
+ALT_DATA_DIR = '/data/flora/vertebroplasty_data'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
         'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed',
+        'episode_start': 0,
         'num_episodes': 4000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
     'sim_vertebroplasty_full_2D': {
         'dataset_dir': DATA_DIR + '/custom_channels_projector_noise_scatter_action_12',
+        'episode_start': 0,
         'num_episodes': 4000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
     'sim_vertebroplasty_11_action_noise_screw_no_robot': {
         'dataset_dir': DATA_DIR + '/custom_channels_projector_scatter_action_11',
+        'episode_start': 0,
         'num_episodes': 4000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
     'sim_vertebroplasty_11_no_robot': {
         'dataset_dir': DATA_DIR + '/action_11_neglog_xray_only_noise',
+        'episode_start': 0,
         'num_episodes': 100,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral']
+    },
+    'NMDID_v1_11_action_pretraining': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1',
+        'episode_start': 0,
+        'num_episodes': 200,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral']
+    },
+    'NMDID_v1_11_action_training': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1',
+        'episode_start': 200,
+        'num_episodes': 4000,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
