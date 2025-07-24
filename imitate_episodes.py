@@ -108,7 +108,7 @@ def main(args):
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_epoch_1500_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_1000_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=dataset_dir)
@@ -274,9 +274,14 @@ def initialize_environment_for_episode(episode, ct=None):
     
     if ct is None:
         # Load phantom and tools
-        phantom_path = os.path.join(episode.phantoms_dir, episode.case, 'TORSO')
-        print(f"Loading phantom from: {phantom_path}")
-        ct = env.load_phantom(phantom_path, from_density=True)
+        if "blanca" in episode.phantoms_dir:
+            phantom_path = os.path.join(episode.phantoms_dir, episode.case, 'TORSO')
+            print(f"Loading phantom from: {phantom_path}")
+            ct = env.load_phantom(phantom_path, from_density=True)
+        else: 
+            phantom_path = os.path.join(episode.phantoms_dir, episode.case)
+            print(f"Loading phantom from: {phantom_path}")
+            ct = env.load_phantom(phantom_path, from_density=False)
         print(f"Loading tools for case: {episode.case}")
     else:
         env.ct = ct
@@ -295,6 +300,7 @@ def initialize_environment_for_episode(episode, ct=None):
     print(f"Loaded tag: {tag}")
     print(f"Initializing projector")
     env.initialize_projector()
+    env.load_screws(6)
 
     print(episode.source_to_detector_distance[0])
     env.device.source_to_detector_distance = int(episode.source_to_detector_distance[0])
@@ -315,6 +321,8 @@ def initialize_environment_for_episode(episode, ct=None):
         world_from_anatomical=ct.world_from_anatomical,
         anatomical_coordinate_system=ct.anatomical_coordinate_system
     )
+
+    env.randomize_background(annotation.startpoint_in_world)
 
     print(f"{episode.lateral_translate_ap}, {episode.superior_translate_ap}, {episode.lateral_translate_lateral}, {episode.superior_translate_lateral}")
     # Generate camera views
@@ -364,7 +372,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
     # files = [f"/data2/flora/vertebroplasty_data/custom_channels_projector_noise_scatter_action_12/episode_{i}.hdf5" for i in range(4001, 4101)]
     if dataset_dir is not None:
-        files = [f"{dataset_dir}/episode_{i}.hdf5" for i in range(config['num_episodes'] + 1, config['num_episodes'] + 101)]
+        files = [f"{dataset_dir}/episode_{i}.hdf5" for i in range(config['num_episodes'] + 100, config['num_episodes'] + 301)]
     episode_previous = None
     ct = None
     distances = []
@@ -491,7 +499,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                     ap_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), False),
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
                             "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
@@ -505,7 +513,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     # Generate lateral image  
                     lateral_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), False),
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
                             "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
@@ -718,6 +726,20 @@ def train_bc(train_dataloader, val_dataloader, config):
     ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{best_epoch}_seed_{seed}.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at epoch {best_epoch}')
+
+    # Save full checkpoint with training state
+    ckpt_path = os.path.join(ckpt_dir, f'policy_best_full_state.ckpt')
+    checkpoint = {
+        'epoch': best_epoch,
+        'model_state_dict': best_state_dict,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'train_history': train_history,
+        'validation_history': validation_history,
+        'min_val_loss': min_val_loss,
+        'best_ckpt_info': best_ckpt_info,
+        'config': config
+    }
+    torch.save(checkpoint, ckpt_path)
 
     # save training curves
     plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed, use_wandb)

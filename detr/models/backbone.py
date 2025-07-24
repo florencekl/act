@@ -91,9 +91,13 @@ class Backbone(BackboneBase):
                  return_interm_layers: bool,
                  dilation: bool,
                  input_channels: int = 3):
+        # backbone = getattr(torchvision.models, name)(
+        #     replace_stride_with_dilation=[False, False, dilation],
+        #     pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+        
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+            pretrained=False, norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
         
         # Modify first conv layer to accept additional input channels
         if input_channels != 3:

@@ -245,7 +245,7 @@ def build(args):
 
     encoder = build_encoder(args)
 
-    print(f"Building DETRVAE model with {len(backbones)} cameras and state_dim {state_dim}, action_dim {args.action_dim} and camera_names {args.camera_names} and num_queries {args.num_queries}")
+    # print(f"Building DETRVAE model with {len(backbones)} cameras and state_dim {state_dim}, action_dim {args.action_dim} and camera_names {args.camera_names} and num_queries {args.num_queries}")
     model = DETRVAE(
         backbones,
         transformer,
