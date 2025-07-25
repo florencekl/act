@@ -1,3 +1,4 @@
+from logging import root
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import csv
@@ -338,9 +339,12 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
             lateral_translations=episode.lateral_translations
         )
     else:
+        print(episode.ap_translations)
+        print(episode.lateral_translations)
+        print(episode.ap_direction)
         ap_view, lateral_view = env.generate_views(
             annotation,
-            episode.ap_direction,
+            geo.Vector3D(episode.ap_direction),
             ap_translations=episode.ap_translations,
             lateral_translations=episode.lateral_translations
         )
@@ -379,7 +383,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         stats = pickle.load(f)
 
 
-    files = [f"/data/flora/vertebroplasty_data/NMDID_subclustering_v1/episode_{i}.hdf5" for i in range(400, 500)]
+    # files = [f"/data/flora/vertebroplasty_data/NMDID_subclustering_v1/episode_{i}.hdf5" for i in range(400, 500)]
     # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
     # files = [f"/data2/flora/vertebroplasty_data/custom_channels_projector_noise_scatter_action_12/episode_{i}.hdf5" for i in range(4001, 4101)]
     if dataset_dir is not None:
@@ -436,16 +440,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 image_dict = dict()
                 # heatmap_dict = dict()
                 for cam_name in config['camera_names']:
-                    heatmap_repeated = np.repeat(
-                        episode_original.heatmaps[cam_name][..., np.newaxis],
-                        episode_original.images[cam_name].shape[-1],
-                        axis=2
-                    )
-                    image_dict[cam_name] = np.concatenate([
-                        episode_original.images[cam_name],
-                        episode_original.masks[cam_name],
-                        heatmap_repeated
-                    ], axis=2)
+                    image_dict[cam_name] = np.array([
+                        episode_original.images[cam_name][starting_timestep],
+                        episode_original.masks[cam_name][starting_timestep],
+                        episode_original.heatmaps[cam_name]
+                    ]).transpose(1, 2, 0)
 
                 # TODO get new starting qpos from the sim environment directly
                 print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
@@ -509,17 +508,32 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                     if config['action_dim'] == 11:
                         direction = target_qpos[8:11]
-                    else:
+                    elif config['action_dim'] == 12:
                         direction_ap = target_qpos[8:10]
                         direction_lateral = target_qpos[10:12]
                         direction_point = triangulate_point(direction_ap, direction_lateral, episode_original.ap_projection, episode_original.lateral_projection)
                         direction = direction_point - cannula_point
+                    elif config['action_dim'] == 9:
+                        dir = (linear_point - cannula_point)
+                        direction = geo.vector(dir / np.linalg.norm(dir))
+                    else:
+                        raise NotImplementedError(f"Unsupported action_dim: {config['action_dim']}")
 
                     # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
                     # print(direction)
                     
                     cannula_point_direction = cannula_point + geo.vector(direction).hat() * 10
                     linear_point_direction = linear_point + geo.vector(direction).hat() * 10
+
+                    if config['action_dim'] == 9:
+                        distance = target_qpos[8]
+                        base_point = cannula_point
+                        base_point = cannula_point + (direction * distance)
+                        direction_point = base_point + (direction * 25)
+                        cannula_point = base_point
+                        linear_point = base_point
+                        cannula_point_direction = direction_point
+                        linear_point_direction = direction_point
 
                     ap_image, masks = env.render_tools(
                         tool_poses={
@@ -585,6 +599,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 annotation_path=episode_original.annotation_path,
                 line_annotation=annotation,
                 episode_number=episode_original.episode,
+                ap_direction=env.anterior_in_world if episode_original.ap_direction is None else episode_original.ap_direction,
                 source_to_detector_distance=env.device.source_to_detector_distance,
                 ap_translations=episode_original.ap_translations,
                 lateral_translations=episode_original.lateral_translations,
@@ -598,8 +613,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 lateral_images=np.array(lateral_images),
                 lateral_masks=np.array(lateral_masks),
                 ap_masks=np.array(ap_masks),
-                ap_heatmaps=np.array(ap_heatmap),
-                lateral_heatmaps=np.array(lateral_heatmap),
+                ap_heatmap=np.array(ap_heatmap),
+                lateral_heatmap=np.array(lateral_heatmap),
             ))
 
             _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
@@ -668,6 +683,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 start_epoch = checkpoint.get('epoch', 0) + 1
                 train_history = checkpoint.get('train_history', [])
+                # print(train_history)
                 validation_history = checkpoint.get('validation_history', [])
                 min_val_loss = checkpoint.get('min_val_loss', np.inf)
                 best_ckpt_info = checkpoint.get('best_ckpt_info', None)

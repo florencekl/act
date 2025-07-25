@@ -184,8 +184,8 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
     # construct dataset and dataloader
     train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
     val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=16, prefetch_factor=4)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=16, prefetch_factor=4)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 
@@ -231,6 +231,8 @@ def sample_insertion_pose():
 ### helper functions
 
 def compute_dict_mean(epoch_dicts):
+    # print(epoch_dicts)
+    # print(epoch_dicts[0])
     result = {k: None for k in epoch_dicts[0]}
     num_items = len(epoch_dicts)
     for k in result:

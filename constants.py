@@ -41,8 +41,15 @@ SIM_TASK_CONFIGS = {
     },
     'NMDID_v1_11_action_training': {
         'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1',
-        'episode_start': 200,
-        'num_episodes': 4000,
+        'episode_start': 0,
+        'num_episodes': 1000,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral']
+    },
+    'NMDID_v11_9_action_training': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.1_2D_action+distance',
+        'episode_start': 0,
+        'num_episodes': 200,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
