@@ -2,6 +2,7 @@ from logging import root
 import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import csv
+import glob
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
@@ -51,6 +52,14 @@ def main(args):
     from constants import SIM_TASK_CONFIGS
     task_config = SIM_TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
+    if 'train_dir' in task_config:
+        train_dir = task_config['train_dir']
+        val_dir = task_config['val_dir']
+        test_dir = task_config['test_dir']
+    else:
+        train_dir = None
+        val_dir = None
+        test_dir = None
     num_episodes = task_config['num_episodes']
     episodes_start = task_config['episode_start']
     episode_len = task_config['episode_len']
@@ -111,11 +120,11 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_epoch_1000_seed_0.ckpt']
+        # ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = [f'policy_last.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=dataset_dir)
+            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -208,7 +217,7 @@ def main(args):
             data=[list(args.values())]
         )}, commit=False)
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val, train_dir=train_dir, val_dir=val_dir)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -293,10 +302,11 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
         env.anterior_in_world = ct.world_from_anatomical @ kg.vector(0, 1, 0)
         env.superior_in_world = ct.world_from_anatomical @ kg.vector(0, 0, 1)
     tools = env.load_tools()
+    
     tag = cfg.paths.vertebra_directory \
         + "/" + episode.case \
         + "/" + cfg.paths.vertebra_subfolder \
-        + "/" + "body_" + os.path.split(os.path.dirname(episode.annotation_path))[-1]
+        + "/" + os.path.split(os.path.dirname(episode.annotation_path))[-1]
 
     mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
     env.tools[tag] = mesh
@@ -326,6 +336,7 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
         anatomical_coordinate_system=ct.anatomical_coordinate_system
     )
 
+    # TODO this randomization is not working right now
     env.randomize_background(annotation.startpoint_in_world)
 
     # print(f"{episode.lateral_translate_ap}, {episode.superior_translate_ap}, {episode.lateral_translate_lateral}, {episode.superior_translate_lateral}")
@@ -361,7 +372,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
-    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps * 4) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -385,9 +396,9 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
     # files = [f"/data/flora/vertebroplasty_data/NMDID_subclustering_v1/episode_{i}.hdf5" for i in range(400, 500)]
     # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
-    # files = [f"/data2/flora/vertebroplasty_data/custom_channels_projector_noise_scatter_action_12/episode_{i}.hdf5" for i in range(4001, 4101)]
+    files = [f"/data_vertebroplasty/flora/vertebroplasty_data/NMDID_subclustering_v1.2_2D_action+distance_8_vector/episode_{i}.hdf5" for i in range(120, 150)]
     if dataset_dir is not None:
-        files = [f"{dataset_dir}/episode_{i}.hdf5" for i in range(config['num_episodes'] + 100, config['num_episodes'] + 301)]
+        files = sorted(glob.glob(os.path.join(dataset_dir, '*.hdf5')))
     episode_previous = None
     ct = None
     distances = []
@@ -449,7 +460,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 # TODO get new starting qpos from the sim environment directly
                 print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
                 qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
-                
+
+                # ! qvel delta positioning
+                # start_position = qpos
+                # qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()
+
                 for t in tqdm(range(max_timesteps), desc="Timesteps"):
                     # new axis for different cameras
                     all_cam_images = []
@@ -471,6 +486,10 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     
                     qpos = pre_process(qpos)
                     qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
+
+                    # ! qvel
+                    # qpos = pre_process(qvel)
+                    # qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
 
                     ### query policy
                     if config['policy_class'] == "ACT":
@@ -497,14 +516,21 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     raw_action = raw_action.squeeze(0).cpu().numpy()
                     action = post_process(raw_action)
                     target_qpos = action
+                    # qvel = target_qpos
+
+                    # ! qvel delta relative position
+                    # start_position = start_position + target_qpos
+                    # target_qpos = start_position
 
                     cannula_ap = target_qpos[:2]
                     cannula_lateral = target_qpos[2:4]
-                    linear_ap = target_qpos[4:6]
-                    linear_lateral = target_qpos[6:8]
 
                     cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-                    linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
+                    
+                    if config['action_dim'] != 8 and config['action_dim'] != 7:
+                        linear_ap = target_qpos[4:6]
+                        linear_lateral = target_qpos[6:8]
+                        linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
 
                     if config['action_dim'] == 11:
                         direction = target_qpos[8:11]
@@ -516,29 +542,42 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     elif config['action_dim'] == 9:
                         dir = (linear_point - cannula_point)
                         direction = geo.vector(dir / np.linalg.norm(dir))
+                    elif config['action_dim'] == 8:
+                        direction = target_qpos[4:7]
+                        distance = target_qpos[7]
+                        linear_point = cannula_point
+                        cannula_point = cannula_point + (direction * distance)
+                    elif config['action_dim'] == 7:
+                        base_point = target_qpos[:3]
+                        direction = geo.vector(target_qpos[3:6])
+                        distance = target_qpos[6]
+                        cannula_point = base_point + (direction * distance)
+                        linear_point = base_point + (direction * distance)
                     else:
                         raise NotImplementedError(f"Unsupported action_dim: {config['action_dim']}")
 
                     # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
                     # print(direction)
-                    
-                    cannula_point_direction = cannula_point + geo.vector(direction).hat() * 10
-                    linear_point_direction = linear_point + geo.vector(direction).hat() * 10
+
+                    cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
+                    linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
+
+                    geo.point(cannula_point_direction).le
 
                     if config['action_dim'] == 9:
                         distance = target_qpos[8]
                         base_point = cannula_point
+                        linear_point = cannula_point
+                        linear_point_direction = linear_point + (direction * 25)
                         base_point = cannula_point + (direction * distance)
                         direction_point = base_point + (direction * 25)
                         cannula_point = base_point
-                        linear_point = base_point
                         cannula_point_direction = direction_point
-                        linear_point_direction = direction_point
 
                     ap_image, masks = env.render_tools(
                         tool_poses={
                             "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
                             tag: (None, None, False),
                         },
                         view=ap_view,
@@ -556,7 +595,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     lateral_image, masks = env.render_tools(
                         tool_poses={
                             "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
                             tag: (None, None, False),
                         },
                         view=lateral_view,

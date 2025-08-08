@@ -11,6 +11,7 @@ from .transformer import build_transformer, TransformerEncoder, TransformerEncod
 import numpy as np
 
 import IPython
+from PIL import Image
 e = IPython.embed
 
 def reparametrize(mu, logvar):
@@ -120,7 +121,8 @@ class DETRVAE(nn.Module):
             all_cam_pos = []
             for cam_id, cam_name in enumerate(self.camera_names):
                 # print(f"Shape of image[:, cam_id]: {image[:, cam_id].shape}")
-                features, pos = self.backbones[cam_id](image[:, cam_id])
+                features, pos = self.backbones[0](image[:, cam_id])
+                # features, pos = self.backbones[cam_id](image[:, cam_id])
                 features = features[0] # take the last layer feature
                 pos = pos[0]
                 all_cam_features.append(self.input_proj(features))
@@ -186,6 +188,12 @@ class CNNMLP(nn.Module):
         all_cam_features = []
         for cam_id, cam_name in enumerate(self.camera_names):
             features, pos = self.backbones[cam_id](image[:, cam_id])
+            import torchvision.transforms as transforms
+
+            # Visualize the first image in the batch for the current camera
+            img_tensor = image[0, cam_id].detach().cpu()  # shape: [C, H, W]
+            img_vis = transforms.ToPILImage()(img_tensor)
+            img_vis.show()
             features = features[0] # take the last layer feature
             pos = pos[0] # not used
             all_cam_features.append(self.backbone_down_projs[cam_id](features))

@@ -2,7 +2,7 @@ import pathlib
 
 ### Task parameters
 DATA_DIR = '/data2/flora/vertebroplasty_data'
-ALT_DATA_DIR = '/data/flora/vertebroplasty_data'
+ALT_DATA_DIR = '/data_vertebroplasty/flora/vertebroplasty_data'
 SIM_TASK_CONFIGS = {
     'sim_vertebroplasty_simple': {
         'dataset_dir': DATA_DIR + '/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed',
@@ -46,12 +46,52 @@ SIM_TASK_CONFIGS = {
         'episode_len': 100,
         'camera_names': ['ap', 'lateral']
     },
-    'NMDID_v11_9_action_training': {
+    'NMDID_v1.1_9_action_training': {
         'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.1_2D_action+distance',
         'episode_start': 0,
-        'num_episodes': 200,
+        'num_episodes': 1.0,
         'episode_len': 100,
-        'camera_names': ['ap', 'lateral']
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.1_2D_action+distance/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.1_2D_action+distance/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.1_2D_action+distance/TEST',
+    },
+    'NMDID_v1.2_8_action_training': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.2_2D_action+distance_8_vector',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral'],
+    },
+    'NMDID_v1.3_7_action_training': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.3_3D_action+distance_7_vector',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.3_3D_action+distance_7_vector/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.3_3D_action+distance_7_vector/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.3_3D_action+distance_7_vector/TEST',
+    },
+    'NMDID_v1.4_9_action_training': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 50,
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector/TEST',
+    },
+    'NMDID_v1.5_9_action_training': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 50,
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/TEST',
     },
 }
 
