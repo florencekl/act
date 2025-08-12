@@ -462,8 +462,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
 
                 # ! qvel delta positioning
-                # start_position = qpos
-                # qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()
+                start_position = qpos
+                qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()
 
                 for t in tqdm(range(max_timesteps), desc="Timesteps"):
                     # new axis for different cameras
@@ -488,8 +488,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
 
                     # ! qvel
-                    # qpos = pre_process(qvel)
-                    # qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
+                    qpos = pre_process(qvel)
+                    qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
 
                     ### query policy
                     if config['policy_class'] == "ACT":
@@ -516,11 +516,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     raw_action = raw_action.squeeze(0).cpu().numpy()
                     action = post_process(raw_action)
                     target_qpos = action
-                    # qvel = target_qpos
+                    qvel = target_qpos
 
+                    # print(qvel, start_position, target_qpos)
                     # ! qvel delta relative position
-                    # start_position = start_position + target_qpos
-                    # target_qpos = start_position
+                    start_position = start_position + target_qpos
+                    target_qpos = start_position
 
                     cannula_ap = target_qpos[:2]
                     cannula_lateral = target_qpos[2:4]
@@ -562,7 +563,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
                     linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
 
-                    geo.point(cannula_point_direction).le
+                    # geo.point(cannula_point_direction).le
 
                     if config['action_dim'] == 9:
                         distance = target_qpos[8]

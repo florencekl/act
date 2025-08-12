@@ -83,15 +83,25 @@ SIM_TASK_CONFIGS = {
         'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector/VAL',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector/TEST',
     },
-    'NMDID_v1.5_9_action_training': {
-        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base',
+    # 'NMDID_v1.5_3D_basics': { FAKE1.5
+    #     'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base',
+    #     'episode_start': 0,
+    #     'num_episodes': 1.0,
+    #     'episode_len': 50,
+    #     'camera_names': ['ap', 'lateral'],
+    #     'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base',
+    #     'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/VAL',
+    #     'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/TEST',
+    # },
+    'NMDID_v1.5_3D_basics': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.5_3D_9_basics',
         'episode_start': 0,
         'num_episodes': 1.0,
-        'episode_len': 50,
+        'episode_len': 100,
         'camera_names': ['ap', 'lateral'],
-        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/TRAIN',
-        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/VAL',
-        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.4_2D_action+distance_9_vector_with_base/TEST',
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.5_3D_9_basics',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.5_3D_9_basics/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.5_3D_9_basics/TEST',
     },
 }
 
