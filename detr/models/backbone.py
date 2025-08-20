@@ -10,6 +10,7 @@ import torchvision
 from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
+from torchvision.models import ResNet18_Weights
 
 from util.misc import NestedTensor, is_main_process
 
@@ -95,9 +96,15 @@ class Backbone(BackboneBase):
         #     replace_stride_with_dilation=[False, False, dilation],
         #     pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
         
+        # backbone = getattr(torchvision.models, name)(
+        #     replace_stride_with_dilation=[False, False, dilation],
+        #     pretrained=True, norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+        # backbone = getattr(torchvision.models, name)(
+        #     replace_stride_with_dilation=[False, False, dilation],
+        #     weights=ResNet18_Weights.IMAGENET1K_V1, norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
-            pretrained=False, norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+            weights=ResNet18_Weights.DEFAULT, norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
         
         # Modify first conv layer to accept additional input channels
         if input_channels != 3:

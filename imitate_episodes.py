@@ -120,8 +120,9 @@ def main(args):
     }
 
     if is_eval:
-        # ckpt_names = [f'policy_best.ckpt']
-        ckpt_names = [f'policy_last.ckpt']
+        ckpt_names = [f'policy_best.ckpt']
+        # ckpt_names = [f'policy_last.ckpt']
+        # ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -359,6 +360,9 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
             ap_translations=episode.ap_translations,
             lateral_translations=episode.lateral_translations
         )
+        print(episode.ct_offset)
+        ap_view["point"] += geo.vector(list(episode.ct_offset))
+        lateral_view["point"] += geo.vector(list(episode.ct_offset))
 
     # env.device.source_to_detector_distance = episode.source_to_detector_distance
 
@@ -372,7 +376,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
-    max_timesteps = int(max_timesteps * 4) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -392,6 +396,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
+    # print(stats)
 
 
     # files = [f"/data/flora/vertebroplasty_data/NMDID_subclustering_v1/episode_{i}.hdf5" for i in range(400, 500)]
@@ -451,11 +456,15 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 image_dict = dict()
                 # heatmap_dict = dict()
                 for cam_name in config['camera_names']:
+                    mask = episode_original.masks[cam_name][starting_timestep].astype(np.float32)
+                    mask = mask / 255.0  # Normalize masks to [0, 1]
                     image_dict[cam_name] = np.array([
                         episode_original.images[cam_name][starting_timestep],
-                        episode_original.masks[cam_name][starting_timestep],
+                        mask,
                         episode_original.heatmaps[cam_name]
                     ]).transpose(1, 2, 0)
+                    print(np.shape(image_dict[cam_name]))
+                    print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
 
                 # TODO get new starting qpos from the sim environment directly
                 print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
@@ -480,7 +489,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     image_data = torch.einsum('k h w c -> k c h w', image_data)
 
                     # normalize image and change dtype to float
-                    image_data = image_data / 255.0
+                    # image_data = image_data / 255.0
+                    
+                    # from PIL import Image
+                    # img = Image.fromarray(np.array((image_data * 255)).astype(np.uint8), mode='RGB')
+                    # img.save(f'test_image_{t}.png')
 
                     image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
                     
@@ -488,6 +501,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
 
                     # ! qvel
+                    # print(qvel)
                     qpos = pre_process(qvel)
                     qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
 
@@ -517,11 +531,13 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     action = post_process(raw_action)
                     target_qpos = action
                     qvel = target_qpos
+                    # print(qvel)
 
                     # print(qvel, start_position, target_qpos)
                     # ! qvel delta relative position
                     start_position = start_position + target_qpos
                     target_qpos = start_position
+                    # print(target_qpos)
 
                     cannula_ap = target_qpos[:2]
                     cannula_lateral = target_qpos[2:4]
@@ -565,20 +581,31 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                     # geo.point(cannula_point_direction).le
 
-                    if config['action_dim'] == 9:
-                        distance = target_qpos[8]
-                        base_point = cannula_point
-                        linear_point = cannula_point
-                        linear_point_direction = linear_point + (direction * 25)
-                        base_point = cannula_point + (direction * distance)
-                        direction_point = base_point + (direction * 25)
-                        cannula_point = base_point
-                        cannula_point_direction = direction_point
+                    if config['action_dim'] == 9 or config['action_dim'] == 12:
+                        
+                        direction = geo.vector(target_qpos[6:9])
+                        cannula_point = geo.point(target_qpos[:3])
+                        cannula_point_direction = cannula_point + direction.hat() * 25
+                        linear_point = geo.point(target_qpos[3:6])
+                        linear_point_direction = linear_point + direction.hat() * 25
+
+                        distance = np.linalg.norm(cannula_point - linear_point)
+                        new_cannula_point = cannula_point + (direction.hat() * distance)
+                        new_cannula_point_direction = new_cannula_point + direction.hat() * 25
+
+                        # distance = target_qpos[8]
+                        # base_point = cannula_point
+                        # linear_point = cannula_point
+                        # linear_point_direction = linear_point + (direction * 25)
+                        # base_point = cannula_point + (direction * distance)
+                        # direction_point = base_point + (direction * 25)
+                        # cannula_point = base_point
+                        # cannula_point_direction = direction_point
 
                     ap_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
+                            "cannula": (geo.point(new_cannula_point), geo.vector(new_cannula_point_direction), True),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
                         view=ap_view,
@@ -588,6 +615,10 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     ap_images.append(ap_image)
                     ap_masks.append(masks["cannula"][0])
                     ap_heatmap = (centroid_heatmap(masks[tag][0]))
+
+                    # import matplotlib.pyplot as plt
+                    # plt.imshow(ap_masks[-1], cmap='gray')
+                    # plt.savefig("ap_mask.png")
                     
                     # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
                     ap_projection = env.device.get_camera_projection()
@@ -595,8 +626,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     # Generate lateral image  
                     lateral_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), True),
+                            "cannula": (geo.point(new_cannula_point), geo.vector(new_cannula_point_direction), True),
+                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
                         view=lateral_view,
@@ -610,9 +641,19 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     # lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
                     lateral_projection = env.device.get_camera_projection()
 
-                    image_dict['ap'] = np.array([ap_images[-1], ap_masks[-1], ap_heatmap]).transpose(1, 2, 0)
-                    image_dict['lateral'] = np.array([lateral_images[-1], lateral_masks[-1], lateral_heatmap]).transpose(1, 2, 0)
+                    current_ap_mask = np.array(ap_masks[-1], dtype=np.uint8).astype(np.float32)
+                    current_ap_mask = current_ap_mask / 255.0  # Normalize masks to [0, 1]
+                    current_lateral_mask = np.array(lateral_masks[-1], dtype=np.uint8).astype(np.float32)
+                    current_lateral_mask = current_lateral_mask / 255.0  # Normalize masks to [0, 1]
+                    image_dict['ap'] = np.array([np.array(ap_images[-1]), current_ap_mask, np.array(ap_heatmap)]).transpose(1, 2, 0)
+                    image_dict['lateral'] = np.array([np.array(lateral_images[-1]), current_lateral_mask, np.array(lateral_heatmap)]).transpose(1, 2, 0)
 
+                    # from PIL import Image
+                    # img = Image.fromarray((image_dict['ap'] * 255).astype(np.uint8), mode='RGB')
+                    # img.save(f'ap_image.png')
+
+                    # img = Image.fromarray((image_dict['lateral'] * 255).astype(np.uint8), mode='RGB')
+                    # img.save(f'lateral_image.png')
                     qpos = target_qpos
 
                     qpos_history.append(qpos)
@@ -648,11 +689,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 qpos=np.array(qpos_history, dtype=np.float32),
                 qvel=np.array(qvel, dtype=np.float32),
                 ap_projection=ap_projection,
+                ct_offset=geo.vector(episode_original.ct_offset),
                 lateral_projection=lateral_projection,
                 ap_images=np.array(ap_images),
                 lateral_images=np.array(lateral_images),
-                lateral_masks=np.array(lateral_masks),
-                ap_masks=np.array(ap_masks),
+                lateral_masks=np.array(lateral_masks, dtype=np.uint8),
+                ap_masks=np.array(ap_masks, dtype=np.uint8),
                 ap_heatmap=np.array(ap_heatmap),
                 lateral_heatmap=np.array(lateral_heatmap),
             ))

@@ -173,12 +173,12 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # construct observations
         image_data = torch.from_numpy(all_cam_images).float()  # Explicitly convert to float32
         qpos_data = torch.from_numpy(qpos).float()
-        qvel_data = torch.from_numpy(qvel).float()
-        action_data = torch.from_numpy(padded_action).float()
+        # qvel_data = torch.from_numpy(qvel).float()
+        # action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
 
         # qvel!
-        qpos_data = torch.from_numpy(qvel).float()
+        # qpos_data = torch.from_numpy(qvel).float()
         qvel_data = torch.from_numpy(qvel).float()
         action_data = torch.from_numpy(padded_qvel).float()
 
@@ -186,7 +186,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         image_data = torch.einsum('k h w c -> k c h w', image_data)
         # Visualize the first image using PIL
         # Convert tensor to numpy array and change from channel-first (C, H, W) to channel-last (H, W, C)
-        img_np = image_data[0].permute(1, 2, 0).numpy()
+        # img_np = image_data[0].permute(1, 2, 0).numpy()
         # Assuming the image data is in range [0,1], scale it to [0,255]
         # img_np = (img_np * 255).astype('uint8')
         # pil_img = Image.fromarray(img_np)
@@ -241,8 +241,11 @@ def get_norm_stats(dataset_dir, episode_files):
     #          "example_qpos": qpos}
     
     # qvel
+    # stats = {"action_mean": qvel_mean.numpy().squeeze(), "action_std": qvel_std.numpy().squeeze(),
+    #          "qpos_mean": qvel_mean.numpy().squeeze(), "qpos_std": qvel_std.numpy().squeeze(),
+    #          "example_qpos": qpos}
     stats = {"action_mean": qvel_mean.numpy().squeeze(), "action_std": qvel_std.numpy().squeeze(),
-             "qpos_mean": qvel_mean.numpy().squeeze(), "qpos_std": qvel_std.numpy().squeeze(),
+             "qpos_mean": qpos_mean.numpy().squeeze(), "qpos_std": qpos_std.numpy().squeeze(),
              "example_qpos": qpos}
 
     return stats

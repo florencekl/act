@@ -103,6 +103,36 @@ SIM_TASK_CONFIGS = {
         'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.5_3D_9_basics/VAL',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.5_3D_9_basics/TEST',
     },
+    'NMDID_v1.6': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.6/valid_episodes',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.6/valid_episodes',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.6/valid_episodes',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.6/valid_episodes',
+    },
+    'NMDID_v1.7': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.7/valid_episodes',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.7/valid_episodes',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.7/valid_episodes',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.7/valid_episodes',
+    },
+    'NMDID_v1.8': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.8/valid_episodes',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.8/valid_episodes',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.8/valid_episodes',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.8/valid_episodes',
+    },
 }
 
 ### Simulation envs fixed constants
