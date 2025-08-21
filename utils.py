@@ -110,16 +110,21 @@ class EpisodicDataset(torch.utils.data.Dataset):
             projection_matrices[cam_name] = root[f'/observations/projection_matrices/{cam_name}'][()]
         
         for cam_name in self.camera_names:
-            # TODO
+            # new approach TODO with cropped mask and 3 channel images using RGB pretrained weights again maybe?
+
+
+            # current approach TODO
             images = root[f'/observations/images/{cam_name}'][start_ts]
             masks = root[f'/observations/masks/{cam_name}'][start_ts].astype(np.float32)
             masks = masks / 255.0  # Normalize masks to [0, 1]
+            heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
+            image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
+
+
             # lateral_masks = np.array(masks['lateral'])
             # shape = root[f'/observations/masks/{cam_name}'].attrs["original_shape"]
             # masks = np.unpackbits(root[f'/observations/masks/{cam_name}'][:])[:np.prod(shape)].reshape(shape)[start_ts]
-            heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
             # print(f"np.shape(images): {np.shape(images)}")
-            image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
             # print(f"np.shape(image_dict[{cam_name}]): {np.shape(image_dict[cam_name])}")
             # print(f"np.min(image_dict[cam_name]): {np.min(image_dict[cam_name])}, np.max(image_dict[cam_name]): {np.max(image_dict[cam_name])}")
             # TODO create PIL rgb image from FULL DICTIONRAY ENTRY * 255 to uint8

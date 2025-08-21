@@ -122,7 +122,7 @@ def main(args):
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_2000_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -570,6 +570,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         distance = target_qpos[6]
                         cannula_point = base_point + (direction * distance)
                         linear_point = base_point + (direction * distance)
+                    elif config['action_dim'] == 10:
+                        base_point = target_qpos[:3]
+                        direction = geo.vector(target_qpos[3:6])
+                        distance = target_qpos[6]
+                        cannula_point = base_point + (direction * distance)
+                        linear_point = base_point + (direction * distance)
                     else:
                         raise NotImplementedError(f"Unsupported action_dim: {config['action_dim']}")
 
@@ -590,8 +596,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         linear_point_direction = linear_point + direction.hat() * 25
 
                         distance = np.linalg.norm(cannula_point - linear_point)
-                        new_cannula_point = cannula_point + (direction.hat() * distance)
-                        new_cannula_point_direction = new_cannula_point + direction.hat() * 25
+                        cannula_point = cannula_point + (direction.hat() * distance)
+                        cannula_point_direction = cannula_point + direction.hat() * 25
 
                         # distance = target_qpos[8]
                         # base_point = cannula_point
@@ -604,7 +610,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                     ap_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(new_cannula_point), geo.vector(new_cannula_point_direction), True),
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
                             "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
@@ -626,7 +632,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     # Generate lateral image  
                     lateral_image, masks = env.render_tools(
                         tool_poses={
-                            "cannula": (geo.point(new_cannula_point), geo.vector(new_cannula_point_direction), True),
+                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
                             "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                             tag: (None, None, False),
                         },
