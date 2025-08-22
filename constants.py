@@ -134,14 +134,14 @@ SIM_TASK_CONFIGS = {
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.8/TEST',
     },
     'NMDID_v1.9_cropped': {
-        'dataset_dir': ALT_DATA_DIR + '/NMDID_v1.9_cropped/valid_episodes',
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.9_cropped/valid_episodes',
         'episode_start': 0,
         'num_episodes': 1.0,
         'episode_len': 200,
         'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
-        'train_dir': ALT_DATA_DIR + '/NMDID_v1.9_cropped/valid_episodes',
-        'val_dir': ALT_DATA_DIR + '/NMDID_v1.9_cropped/valid_episodes',
-        'test_dir': ALT_DATA_DIR + '/NMDID_v1.9_cropped/TEST',
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.9_cropped/valid_episodes',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.9_cropped/valid_episodes',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.9_cropped/valid_episodes/TEST',
     },
 }
 

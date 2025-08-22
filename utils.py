@@ -3,6 +3,7 @@ import torch
 import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
+from PIL import Image
 import glob
 
 import IPython
@@ -105,35 +106,56 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # Load annotations and projection matrices
         annotation_start = root['/annotations/start'][()]
         annotation_end = root['/annotations/end'][()]
-        projection_matrices = {}
-        for cam_name in self.camera_names:
-            projection_matrices[cam_name] = root[f'/observations/projection_matrices/{cam_name}'][()]
+        # projection_matrices = {}
+        # for cam_name in self.camera_names:
+        #     projection_matrices[cam_name] = root[f'/observations/projection_matrices/{cam_name}'][()]
+
+        target_size = (256, 256)  # or (64, 64) depending on your preference
         
-        for cam_name in self.camera_names:
-            # new approach TODO with cropped mask and 3 channel images using RGB pretrained weights again maybe?
+        if not 'observations/heatmaps' in root:
+            for cam_name in self.camera_names:
+                # new approach TODO with cropped mask and 3 channel images
+                img = root[f'/observations/images/{cam_name}'][start_ts]
+            
+                # Resize image if it doesn't match target size
+                if img.shape[:2] != target_size:
+                        pil_img = Image.fromarray(img)
+                        img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+
+                # for normal backbone TODO
+                # image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
+
+                # for xrv backbone
+                print(np.shape(img))
+                img = img[None, ...]
+                print(np.shape(img))
+                image_dict[cam_name] = img
+        else:
+            for cam_name in self.camera_names:
+                # new approach TODO with cropped mask and 3 channel images using RGB pretrained weights again maybe?
 
 
-            # current approach TODO
-            images = root[f'/observations/images/{cam_name}'][start_ts]
-            masks = root[f'/observations/masks/{cam_name}'][start_ts].astype(np.float32)
-            masks = masks / 255.0  # Normalize masks to [0, 1]
-            heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
-            image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
+                # current approach TODO
+                images = root[f'/observations/images/{cam_name}'][start_ts]
+                masks = root[f'/observations/masks/{cam_name}'][start_ts].astype(np.float32)
+                masks = masks / 255.0  # Normalize masks to [0, 1]
+                heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
+                image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
 
 
-            # lateral_masks = np.array(masks['lateral'])
-            # shape = root[f'/observations/masks/{cam_name}'].attrs["original_shape"]
-            # masks = np.unpackbits(root[f'/observations/masks/{cam_name}'][:])[:np.prod(shape)].reshape(shape)[start_ts]
-            # print(f"np.shape(images): {np.shape(images)}")
-            # print(f"np.shape(image_dict[{cam_name}]): {np.shape(image_dict[cam_name])}")
-            # print(f"np.min(image_dict[cam_name]): {np.min(image_dict[cam_name])}, np.max(image_dict[cam_name]): {np.max(image_dict[cam_name])}")
-            # TODO create PIL rgb image from FULL DICTIONRAY ENTRY * 255 to uint8
-            # from PIL import Image
-            # img = Image.fromarray((image_dict[cam_name] * 255).astype(np.uint8), mode='RGB')
-            # img.save(f'/data/flora/vertebroplasty_training/NMDID_v1_11_action_pretraining/{cam_name}_image.png')
+                # lateral_masks = np.array(masks['lateral'])
+                # shape = root[f'/observations/masks/{cam_name}'].attrs["original_shape"]
+                # masks = np.unpackbits(root[f'/observations/masks/{cam_name}'][:])[:np.prod(shape)].reshape(shape)[start_ts]
+                # print(f"np.shape(images): {np.shape(images)}")
+                # print(f"np.shape(image_dict[{cam_name}]): {np.shape(image_dict[cam_name])}")
+                # print(f"np.min(image_dict[cam_name]): {np.min(image_dict[cam_name])}, np.max(image_dict[cam_name]): {np.max(image_dict[cam_name])}")
+                # TODO create PIL rgb image from FULL DICTIONRAY ENTRY * 255 to uint8
+                # from PIL import Image
+                # img = Image.fromarray((image_dict[cam_name] * 255).astype(np.uint8), mode='RGB')
+                # img.save(f'/data/flora/vertebroplasty_training/NMDID_v1_11_action_pretraining/{cam_name}_image.png')
 
 
-            # heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
+                # heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
         # get all actions after and including start_ts
         if is_sim:
             action = root['/action'][start_ts:]
@@ -157,16 +179,9 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
         # new axis for different cameras
         all_cam_images = []
+        
         for cam_name in self.camera_names:
             img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-            # print(np.min(img), np.max(img))
-            # heatmap = heatmap_dict[cam_name]  # Ensure float32
-            # Ensure heatmap has shape (H, W), add channel dim
-            # if heatmap.ndim == 2:
-            #     heatmap = heatmap[..., None]  # (H, W, 1)
-            # Concatenate along channel axis (last axis)
-            # img_with_heatmap = np.concatenate([img, heatmap], axis=-1)  # (H, W, C+1)
-            # all_cam_images.append(img_with_heatmap)
             all_cam_images.append(img)
             
             # TODO DEBUG if you want to visualize heatmaps and images that we use for training

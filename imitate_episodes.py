@@ -122,7 +122,7 @@ def main(args):
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_2000_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -455,16 +455,21 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 # get observation at start_ts only
                 image_dict = dict()
                 # heatmap_dict = dict()
-                for cam_name in config['camera_names']:
-                    mask = episode_original.masks[cam_name][starting_timestep].astype(np.float32)
-                    mask = mask / 255.0  # Normalize masks to [0, 1]
-                    image_dict[cam_name] = np.array([
-                        episode_original.images[cam_name][starting_timestep],
-                        mask,
-                        episode_original.heatmaps[cam_name]
-                    ]).transpose(1, 2, 0)
-                    print(np.shape(image_dict[cam_name]))
-                    print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
+                if not 'observations/heatmaps' in root:
+                    for cam_name in config['camera_names']:
+                        # new approach TODO with cropped mask and 3 channel images
+                        image_dict[cam_name] = np.repeat(root[f'/observations/images/{cam_name}'][starting_timestep], 3, axis=-1)
+                else:
+                    for cam_name in config['camera_names']:
+                        mask = episode_original.masks[cam_name][starting_timestep].astype(np.float32)
+                        mask = mask / 255.0  # Normalize masks to [0, 1]
+                        image_dict[cam_name] = np.array([
+                            episode_original.images[cam_name][starting_timestep],
+                            mask,
+                            episode_original.heatmaps[cam_name]
+                        ]).transpose(1, 2, 0)
+                        print(np.shape(image_dict[cam_name]))
+                        print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
 
                 # TODO get new starting qpos from the sim environment directly
                 print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
@@ -574,8 +579,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         base_point = target_qpos[:3]
                         direction = geo.vector(target_qpos[3:6])
                         distance = target_qpos[6]
+                        distance = np.min([distance, 125])
                         cannula_point = base_point + (direction * distance)
                         linear_point = base_point + (direction * distance)
+                        start_position[7] = np.round(action[7])
+                        start_position[8] = np.round(action[8])
+                        start_position[9] = np.round(action[9])
                     else:
                         raise NotImplementedError(f"Unsupported action_dim: {config['action_dim']}")
 
@@ -616,6 +625,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         },
                         view=ap_view,
                         rotation=rotation,
+                        generate_masks=True,
                     )
 
                     ap_images.append(ap_image)
@@ -638,6 +648,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         },
                         view=lateral_view,
                         rotation=rotation,
+                        generate_masks=True,
                     )
                     
                     lateral_images.append(lateral_image)
@@ -703,6 +714,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 ap_masks=np.array(ap_masks, dtype=np.uint8),
                 ap_heatmap=np.array(ap_heatmap),
                 lateral_heatmap=np.array(lateral_heatmap),
+                ap_cropped=None,
+                lateral_cropped=None,
             ))
 
             _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
@@ -835,7 +848,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             
             wandb.log(log_dict, step=epoch)
 
-        if epoch % 250 == 0:
+        if epoch % 200 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             # Save full checkpoint with training state
             checkpoint = {

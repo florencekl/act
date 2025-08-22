@@ -11,6 +11,8 @@ from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
 from torchvision.models import ResNet18_Weights
+# detr/models/backbone.py (add near other imports)
+from .backbone_xrv import XRV_DenseNet121_Backbone
 
 from util.misc import NestedTensor, is_main_process
 
@@ -155,12 +157,33 @@ class Joiner(nn.Sequential):
         return out, pos
 
 
+# def build_backbone(args):
+#     position_embedding = build_position_encoding(args)
+#     train_backbone = args.lr_backbone > 0
+#     return_interm_layers = args.masks
+#     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, input_channels)
+#     model = Joiner(backbone, position_embedding)
+#     model.num_channels = backbone.num_channels
+#     return model
+
 def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
-    input_channels = getattr(args, 'input_channels', 3)  # Default to 3 if not specified
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, input_channels)
-    model = Joiner(backbone, position_embedding)
-    model.num_channels = backbone.num_channels
-    return model
+
+    if getattr(args, "backbone", "") == "xrv_densenet121":
+        backbone = XRV_DenseNet121_Backbone(
+            return_interm_layers=return_interm_layers,
+            train_backbone=train_backbone,
+            use_frozen_bn=False,  # set True if you want FrozenBN behavior
+        )
+        model = Joiner(backbone, position_embedding)
+        model.num_channels = backbone.num_channels
+        return model
+    else:
+        input_channels = getattr(args, 'input_channels', 3)  # Default to 3 if not specified
+        backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, input_channels)
+        model = Joiner(backbone, position_embedding)
+        model.num_channels = backbone.num_channels
+        return model
+
