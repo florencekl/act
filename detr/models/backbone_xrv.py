@@ -33,8 +33,9 @@ class XRV_DenseNet121_Backbone(nn.Module):
     def __init__(self, return_interm_layers: bool = False, train_backbone: bool = True, use_frozen_bn: bool = False):
         super().__init__()
         # Common strong checkpoint across NIH/CheXpert/MIMIC @ 224x224
-        # (xrv wraps torchvision densenet121 under .features)
+        # (xrv wraps torchvision densenet121 under .features)densenet121-res224-chex
         self.net = xrv.models.DenseNet(weights="densenet121-res224-all")
+        # self.net = xrv.models.DenseNet(weights="densenet121-res224-all")
         if not train_backbone:
             for p in self.net.parameters():
                 p.requires_grad_(False)
