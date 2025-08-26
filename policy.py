@@ -22,11 +22,11 @@ class ACTPolicy(nn.Module):
         # heatmap = image[:, :, 3:, ...]  # keep as is
         # check how many channels image
 
-        # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                 std=[0.229, 0.224, 0.225])
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                        std=[0.229, 0.224, 0.225])
         # for xrv backbone
-        normalize = transforms.Normalize(mean=[0.5],
-                                        std=[0.5])
+        # normalize = transforms.Normalize(mean=[0.5],
+        #                                 std=[0.5])
         # normalize = transforms.Normalize(mean=[0.5, 0.0, 0.5], std=[0.5, 1.0, 0.5])
         image = normalize(image)
         # custom normalization for channels of xray, mask, heatmap

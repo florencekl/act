@@ -3,6 +3,7 @@ import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import csv
 import glob
+from typing import Any, Tuple
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
@@ -70,8 +71,8 @@ def main(args):
     # TODO change state_dim according to task
     state_dim = action_dim
     lr_backbone = 1e-5
-    # backbone = 'resnet18'
-    backbone = 'xrv_densenet121'
+    backbone = 'resnet18'
+    # backbone = 'xrv_densenet121'
     if policy_class == 'ACT':
         enc_layers = 4
         dec_layers = 7
@@ -122,9 +123,9 @@ def main(args):
     }
 
     if is_eval:
-        # ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        ckpt_names = [f'policy_epoch_200_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_200_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -280,7 +281,7 @@ def get_image(ts, camera_names):
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
-def initialize_environment_for_episode(episode: EpisodeData, ct=None):
+def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[SimulationEnvironment, Any, str, LineAnnotation, Any, Any, int]:
     """
     Initializes the simulation environment, loads phantom, tools, mesh, and annotation for a given episode.
     Returns: env, ct, tag, annotation, ap_view, lateral_view, rotation
@@ -314,12 +315,12 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
     mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
     env.tools[tag] = mesh
     env.tools[tag].enabled = False
-    print(f"Loaded tag: {tag}")
+    # print(f"Loaded tag: {tag}")
     print(f"Initializing projector")
     env.initialize_projector()
     env.load_screws(6)
 
-    print(episode.source_to_detector_distance[0])
+    # print(episode.source_to_detector_distance[0])
     env.device.source_to_detector_distance = int(episode.source_to_detector_distance[0])
 
     if "_R" in episode.annotation_path:
@@ -353,9 +354,9 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
             lateral_translations=episode.lateral_translations
         )
     else:
-        print(episode.ap_translations)
-        print(episode.lateral_translations)
-        print(episode.ap_direction)
+        # print(episode.ap_translations)
+        # print(episode.lateral_translations)
+        # print(episode.ap_direction)
         ap_view, lateral_view = env.generate_views(
             annotation,
             geo.Vector3D(episode.ap_direction),
@@ -369,6 +370,16 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None):
     # env.device.source_to_detector_distance = episode.source_to_detector_distance
 
     return env, ct, tag, annotation, ap_view, lateral_view, rotation
+
+
+def generate_random_vector(env: SimulationEnvironment) -> np.ndarray:
+    while True:
+        rand_vec = np.random.randn(3)
+        proj = np.dot(rand_vec, env.anterior_in_world) * env.anterior_in_world
+        perp_vec = rand_vec - proj
+        norm = np.linalg.norm(perp_vec)
+        if norm > 1e-6:
+            return perp_vec / norm
 
 
 def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
@@ -394,7 +405,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     print(loading_status)
     policy.cuda()
     policy.eval()
-    print(f'Loaded: {ckpt_path}')
+    # print(f'Loaded: {ckpt_path}')
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
@@ -408,7 +419,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         files = sorted(glob.glob(os.path.join(dataset_dir, '*.hdf5')))
     episode_previous = None
     ct = None
-    distances = []
+    regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
+    os.makedirs(regenerated_folder, exist_ok=True)
+    csv_file = os.path.join(config['ckpt_dir'], "regenerated_episodes", "episode_distances.csv")
+    with open(csv_file, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode_number", "rollout_id", "distance"])
     for filename in files:
         ### --- SETUP SIMULATION ENVIRONMENT --- ###
         if filename is None:
@@ -416,7 +432,10 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         episode_original = EpisodeData.from_hdf5(filename)
 
-        print(f"Case: {episode_original.case}")
+        # if episode_original.episode < 2123:
+        #     continue
+
+        # print(f"Case: {episode_original.case}")
 
         if episode_previous is not None and episode_previous.case == episode_original.case and ct is not None:
             env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original, ct=ct)
@@ -431,14 +450,17 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         query_frequency = policy_config['num_queries']
         if temporal_agg:
-            query_frequency = 10
+            query_frequency = 5
+            # query_frequency = 1
             num_queries = policy_config['num_queries']
 
-        num_rollouts = 1
+        regenerated_episodes = []
+        evaluation_distance_list = []
+
+        num_rollouts = 10
         for rollout_id in range(num_rollouts):
-            regenerated_episodes = []
             set_seed(rollout_id)
-            print(f"Rollout {rollout_id+1}/{num_rollouts}")
+            # print(f"Rollout {rollout_id+1}/{num_rollouts}")
             lateral_images = []
             lateral_cropped = []
             lateral_masks = []
@@ -462,11 +484,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 image_dict = dict()
                 # heatmap_dict = dict()
                 if 'ap_cropped' in episode_original.images:
-                    print("Using AP cropped images")
+                    # print("Using AP cropped images")
                     for cam_name in config['camera_names']:
                         # new approach TODO with cropped mask and 3 channel images
                         img = episode_original.images[cam_name][starting_timestep]
-                        print(img.shape)
+                        # print(img.shape)
                         if img.shape[:2] != target_size:
                             pil_img = Image.fromarray(img)
                             img = np.array(pil_img.resize(target_size, Image.BILINEAR))
@@ -480,16 +502,32 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             mask,
                             episode_original.heatmaps[cam_name]
                         ]).transpose(1, 2, 0)
-                        print(np.shape(image_dict[cam_name]))
-                        print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
+                        # print(np.shape(image_dict[cam_name]))
+                        # print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
 
                 # TODO get new starting qpos from the sim environment directly
-                print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
+                # print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
                 qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
+                target_qpos = qpos.copy()
+
+                # TODO randomize starting positions
+                start_position = qpos
+
+                if rollout_id > 0:
+
+                    offset_direction = generate_random_vector(env)
+
+                    offset_point = kg.point(
+                        qpos[0] + np.random.uniform(env.cfg.simulation.cannula_offset[0], env.cfg.simulation.cannula_offset[1]) * offset_direction[0],
+                        qpos[1] + np.random.uniform(env.cfg.simulation.cannula_offset[0], env.cfg.simulation.cannula_offset[1]) * offset_direction[1],
+                        qpos[2] + np.random.uniform(env.cfg.simulation.cannula_offset[0], env.cfg.simulation.cannula_offset[1]) * offset_direction[2],
+                    )
+
+                    start_position[:3] = offset_point.tolist()[:3]
 
                 # ! qvel delta positioning
-                start_position = qpos
                 qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()
+                action = np.zeros_like(qvel)
 
                 xrays = {}
                 crop_center = {}
@@ -514,6 +552,126 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 env.ct.set_enabled(False)
 
                 for t in tqdm(range(max_timesteps), desc="Timesteps"):
+
+                    # # Dynamically compute the query frequency based on the current timestep "t"
+                    # if t < 0.5 * max_timesteps:
+                    #     query_frequency = 10
+                    # elif t < 0.8 * max_timesteps:
+                    #     query_frequency = 5
+
+                    #     # # Linearly interpolate from 10 to 5 between 50% and 90% of max timesteps
+                    #     # fraction = (t - 0.5 * max_timesteps) / (0.4 * max_timesteps)
+                    #     # query_frequency = int(round(10 - 5 * fraction))
+                    # else:
+                    #     query_frequency = 1
+                    #     # # Linearly interpolate from 5 to 1 between 90% and 100% of max timesteps
+                    #     # fraction = (t - 0.9 * max_timesteps) / (0.1 * max_timesteps)
+                    #     # query_frequency = max(1, int(round(5 - 4 * fraction)))
+
+                    base_point = target_qpos[:3]
+                    direction = geo.vector(target_qpos[3:6])
+                    distance = target_qpos[6]
+
+                    # limit distance artifically
+                    # distance = np.min([distance, 125])
+
+                    cannula_point = base_point + (direction * distance)
+                    linear_point = base_point + (direction * distance)
+                    start_position[7] = np.round(action[7])
+                    start_position[8] = np.round(action[8])
+                    start_position[9] = np.round(action[9])
+
+                    cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
+                    linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
+
+                    reached_goal_position = cannula_point
+
+                    if t % query_frequency == 0:
+
+                        ap_image, _ = env.render_tools(
+                            tool_poses={
+                                "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
+                                "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
+                                tag: (None, None, False),
+                            },
+                            view=ap_view,
+                            rotation=rotation,
+                            generate_masks=False,
+                        )
+                        ap_image = (ap_image - ap_image.min()) / (ap_image.max() - ap_image.min() + 1e-8)
+                        ap_image = 0.5 * xrays["ap_view"] + 0.5 * ap_image
+                        ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
+
+                        ap_images.append(ap_image)
+                        # ap_masks.append(masks["cannula"][0])
+                        # ap_heatmap = (centroid_heatmap(masks[tag][0]))
+
+                        # Create cropped image (1/8th the size) centered on the highest value of the heatmap
+                        h, w = ap_image.shape[:2]
+                        crop_w, crop_h = w // 2, h // 2
+                        
+                        # Find the position of the maximum value in the heatmap
+                        # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
+                        center_y, center_x = crop_center['ap_view']
+
+                        # Compute crop corners ensuring they are within the image bounds
+                        start_x = max(center_x - crop_w // 2, 0)
+                        start_y = max(center_y - crop_h // 2, 0)
+                        end_x = min(start_x + crop_w, w)
+                        end_y = min(start_y + crop_h, h)
+                        
+                        ap_cropped.append(ap_image[start_y:end_y, start_x:end_x])
+                        
+                        # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
+                        ap_projection = env.device.get_camera_projection()
+                        
+                        # Generate lateral image  
+                        lateral_image, _ = env.render_tools(
+                            tool_poses={
+                                "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
+                                "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
+                                tag: (None, None, False),
+                            },
+                            view=lateral_view,
+                            rotation=rotation,
+                            generate_masks=False,
+                        )
+                        lateral_image = (lateral_image - lateral_image.min()) / (lateral_image.max() - lateral_image.min() + 1e-8)
+                        lateral_image = 0.5 * xrays["lateral_view"] + 0.5 * lateral_image
+                        lateral_image = env.histogram_matching(lateral_image, xrays["lateral_view"])
+
+                        lateral_images.append(lateral_image)
+                        # lateral_masks.append(masks["cannula"][0])
+                        # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
+
+                        # Create cropped image (1/8th the size) centered on the highest value of the heatmap
+                        h, w = lateral_image.shape[:2]
+                        crop_w, crop_h = w // 2, h // 2
+                        
+                        # Find the position of the maximum value in the heatmap
+                        # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
+                        center_y, center_x = crop_center['lateral_view']
+
+                        # Compute crop corners ensuring they are within the image bounds
+                        start_x = max(center_x - crop_w // 2, 0)
+                        start_y = max(center_y - crop_h // 2, 0)
+                        end_x = min(start_x + crop_w, w)
+                        end_y = min(start_y + crop_h, h)
+
+                        lateral_cropped.append(lateral_image[start_y:end_y, start_x:end_x])
+
+                        lateral_projection = env.device.get_camera_projection()
+                        
+                        image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
+                        image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
+                        
+                        crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
+                        image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
+                        crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
+                        image_dict['lateral_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
+
+                        qpos_history.append(qpos)
+
                     # new axis for different cameras
                     all_cam_images = []
                     for cam_name in config['camera_names']:
@@ -571,202 +729,23 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     action = post_process(raw_action)
                     target_qpos = action
                     qvel = target_qpos
-                    # print(qvel)
 
                     # print(qvel, start_position, target_qpos)
                     # ! qvel delta relative position
                     start_position = start_position + target_qpos
                     target_qpos = start_position
-                    # print(target_qpos)
 
-                    cannula_ap = target_qpos[:2]
-                    cannula_lateral = target_qpos[2:4]
-
-                    cannula_point = triangulate_point(cannula_ap, cannula_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-                    
-                    if config['action_dim'] != 8 and config['action_dim'] != 7:
-                        linear_ap = target_qpos[4:6]
-                        linear_lateral = target_qpos[6:8]
-                        linear_point = triangulate_point(linear_ap, linear_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-
-                    if config['action_dim'] == 11:
-                        direction = target_qpos[8:11]
-                    elif config['action_dim'] == 12:
-                        direction_ap = target_qpos[8:10]
-                        direction_lateral = target_qpos[10:12]
-                        direction_point = triangulate_point(direction_ap, direction_lateral, episode_original.ap_projection, episode_original.lateral_projection)
-                        direction = direction_point - cannula_point
-                    elif config['action_dim'] == 9:
-                        dir = (linear_point - cannula_point)
-                        direction = geo.vector(dir / np.linalg.norm(dir))
-                    elif config['action_dim'] == 8:
-                        direction = target_qpos[4:7]
-                        distance = target_qpos[7]
-                        linear_point = cannula_point
-                        cannula_point = cannula_point + (direction * distance)
-                    elif config['action_dim'] == 7:
-                        base_point = target_qpos[:3]
-                        direction = geo.vector(target_qpos[3:6])
-                        distance = target_qpos[6]
-                        cannula_point = base_point + (direction * distance)
-                        linear_point = base_point + (direction * distance)
-                    elif config['action_dim'] == 10:
-                        base_point = target_qpos[:3]
-                        direction = geo.vector(target_qpos[3:6])
-                        distance = target_qpos[6]
-                        # limit distance artifically
-                        # distance = np.min([distance, 125])
-                        cannula_point = base_point + (direction * distance)
-                        linear_point = base_point + (direction * distance)
-                        start_position[7] = np.round(action[7])
-                        start_position[8] = np.round(action[8])
-                        start_position[9] = np.round(action[9])
-                    else:
-                        raise NotImplementedError(f"Unsupported action_dim: {config['action_dim']}")
-
-                    # direction = estimate_3d_direction(qpos[i][8:10], qpos[i][10:12], ap_proj, lat_proj)
-                    # print(direction)
-
-                    cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
-                    linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
-
-                    # geo.point(cannula_point_direction).le
-
-                    if config['action_dim'] == 9 or config['action_dim'] == 12:
-                        
-                        direction = geo.vector(target_qpos[6:9])
-                        cannula_point = geo.point(target_qpos[:3])
-                        cannula_point_direction = cannula_point + direction.hat() * 25
-                        linear_point = geo.point(target_qpos[3:6])
-                        linear_point_direction = linear_point + direction.hat() * 25
-
-                        distance = np.linalg.norm(cannula_point - linear_point)
-                        cannula_point = cannula_point + (direction.hat() * distance)
-                        cannula_point_direction = cannula_point + direction.hat() * 25
-
-                        # distance = target_qpos[8]
-                        # base_point = cannula_point
-                        # linear_point = cannula_point
-                        # linear_point_direction = linear_point + (direction * 25)
-                        # base_point = cannula_point + (direction * distance)
-                        # direction_point = base_point + (direction * 25)
-                        # cannula_point = base_point
-                        # cannula_point_direction = direction_point
-
-                    ap_image, _ = env.render_tools(
-                        tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
-                            tag: (None, None, False),
-                        },
-                        view=ap_view,
-                        rotation=rotation,
-                        generate_masks=False,
-                    )
-                    ap_image = (ap_image - ap_image.min()) / (ap_image.max() - ap_image.min() + 1e-8)
-                    ap_image = 0.5 * xrays["ap_view"] + 0.5 * ap_image
-                    ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
-
-                    ap_images.append(ap_image)
-                    # ap_masks.append(masks["cannula"][0])
-                    # ap_heatmap = (centroid_heatmap(masks[tag][0]))
-
-                    # Create cropped image (1/8th the size) centered on the highest value of the heatmap
-                    h, w = ap_image.shape[:2]
-                    crop_w, crop_h = w // 2, h // 2
-                    
-                    # Find the position of the maximum value in the heatmap
-                    # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
-                    center_y, center_x = crop_center['ap_view']
-
-                    # Compute crop corners ensuring they are within the image bounds
-                    start_x = max(center_x - crop_w // 2, 0)
-                    start_y = max(center_y - crop_h // 2, 0)
-                    end_x = min(start_x + crop_w, w)
-                    end_y = min(start_y + crop_h, h)
-                    
-                    ap_cropped.append(ap_image[start_y:end_y, start_x:end_x])
-
-                    # import matplotlib.pyplot as plt
-                    # plt.imshow(ap_masks[-1], cmap='gray')
-                    # plt.savefig("ap_mask.png")
-                    
-                    # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
-                    ap_projection = env.device.get_camera_projection()
-                    
-                    # Generate lateral image  
-                    lateral_image, _ = env.render_tools(
-                        tool_poses={
-                            "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
-                            "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
-                            tag: (None, None, False),
-                        },
-                        view=lateral_view,
-                        rotation=rotation,
-                        generate_masks=False,
-                    )
-                    lateral_image = (lateral_image - lateral_image.min()) / (lateral_image.max() - lateral_image.min() + 1e-8)
-                    lateral_image = 0.5 * xrays["lateral_view"] + 0.5 * lateral_image
-                    lateral_image = env.histogram_matching(lateral_image, xrays["lateral_view"])
-
-                    lateral_images.append(lateral_image)
-                    # lateral_masks.append(masks["cannula"][0])
-                    # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
-
-                    # Create cropped image (1/8th the size) centered on the highest value of the heatmap
-                    h, w = lateral_image.shape[:2]
-                    crop_w, crop_h = w // 2, h // 2
-                    
-                    # Find the position of the maximum value in the heatmap
-                    # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
-                    center_y, center_x = crop_center['lateral_view']
-
-                    # Compute crop corners ensuring they are within the image bounds
-                    start_x = max(center_x - crop_w // 2, 0)
-                    start_y = max(center_y - crop_h // 2, 0)
-                    end_x = min(start_x + crop_w, w)
-                    end_y = min(start_y + crop_h, h)
-
-                    lateral_cropped.append(lateral_image[start_y:end_y, start_x:end_x])
-
-                    # lateral_images.append(SimulationEnvironment.process_image(lateral_image, masks, ("cannula", tag), neglog=False, invert=False))
-                    lateral_projection = env.device.get_camera_projection()
-
-                    # current_ap_mask = np.array(ap_masks[-1], dtype=np.uint8).astype(np.float32)
-                    # current_ap_mask = current_ap_mask / 255.0  # Normalize masks to [0, 1]
-                    # current_lateral_mask = np.array(lateral_masks[-1], dtype=np.uint8).astype(np.float32)
-                    # current_lateral_mask = current_lateral_mask / 255.0  # Normalize masks to [0, 1]
-                    # image_dict['ap'] = np.array([np.array(ap_images[-1]), current_ap_mask, np.array(ap_heatmap)]).transpose(1, 2, 0)
-                    # image_dict['lateral'] = np.array([np.array(lateral_images[-1]), current_lateral_mask, np.array(lateral_heatmap)]).transpose(1, 2, 0)
-                    
-                    image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
-                    image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
-                    
-                    crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
-                    image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
-                    crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
-                    image_dict['lateral_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
-
-                    # from PIL import Image
-                    # img = Image.fromarray((image_dict['ap'] * 255).astype(np.uint8), mode='RGB')
-                    # img.save(f'ap_image.png')
-
-                    # img = Image.fromarray((image_dict['lateral'] * 255).astype(np.uint8), mode='RGB')
-                    # img.save(f'lateral_image.png')
                     qpos = target_qpos
-
-                    qpos_history.append(qpos)
-                    # print(qpos)
 
             # Convert to numpy arrays
             ap_images = np.array(ap_images)
-            print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
+            # print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
             lateral_images = np.array(lateral_images)
-            print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
+            # print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
             
-            print(f"Generated {len(ap_images)} images")
-            print(f"AP image shape: {ap_images.shape}")
-            print(f"Lateral image shape: {lateral_images.shape}")
+            # print(f"Generated {len(ap_images)} images")
+            # print(f"AP image shape: {ap_images.shape}")
+            # print(f"Lateral image shape: {lateral_images.shape}")
 
             qvel = np.vstack(([0] * config['action_dim'], np.diff(qpos_history, axis=0)))
             qvel = qvel.tolist()
@@ -807,21 +786,24 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             # _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
             # calculate difference between 2 positions
 
-            distance = np.linalg.norm(episode_original.qpos[config['episode_len']-1, :3] - regenerated_episodes[-1].qpos[(config['episode_len'] * 2)-1, :3])
+            goal_position = annotation.startpoint_in_world.lerp(annotation.endpoint_in_world, env.cfg.simulation.end_progress)
 
-            print(f"Distance for rollout {rollout_id+1}: {distance}")
+            evaluation_distance = np.linalg.norm(geo.point(goal_position) - geo.point(reached_goal_position))
 
-            distances.append(distance)
-            csv_file = os.path.join(config['ckpt_dir'], "episode_distances.csv")
+            # print(f"Distance for rollout {rollout_id}: {evaluation_distance}")
+
+            evaluation_distance_list.append(evaluation_distance)
+            csv_file = os.path.join(config['ckpt_dir'], "regenerated_episodes", "episode_distances.csv")
             with open(csv_file, "a", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow([episode_original.episode, distance])
-        
+                writer.writerow([episode_original.episode, rollout_id, evaluation_distance])
+
         # print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
-        # print(f"Distances: {distances}")
+        print(f"Distances: {evaluation_distance_list} argmin: {np.argmin(evaluation_distance_list)} -> distance {evaluation_distance_list[np.argmin(evaluation_distance_list)]}")
+
         regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
         os.makedirs(regenerated_folder, exist_ok=True)
-        env.save_episode(regenerated_episodes[-1], regenerated_folder, episode_original.episode)
+        env.save_episode(regenerated_episodes[np.argmin(evaluation_distance_list)], regenerated_folder, episode_original.episode)
 
         episode_previous = episode_original
 

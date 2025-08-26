@@ -35,7 +35,7 @@ class XRV_DenseNet121_Backbone(nn.Module):
         # Common strong checkpoint across NIH/CheXpert/MIMIC @ 224x224
         # (xrv wraps torchvision densenet121 under .features)densenet121-res224-chex
         self.net = xrv.models.DenseNet(weights="densenet121-res224-all")
-        # self.net = xrv.models.DenseNet(weights="densenet121-res224-all")
+        # self.net = xrv.models.DenseNet(weights="densenet121-res224-chex")
         if not train_backbone:
             for p in self.net.parameters():
                 p.requires_grad_(False)

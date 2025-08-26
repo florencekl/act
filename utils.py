@@ -123,11 +123,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
 
                 # for normal backbone TODO
-                # image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
+                image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
 
                 # for xrv backbone
-                img = img[..., None]
-                image_dict[cam_name] = img
+                # img = img[..., None]
+                # image_dict[cam_name] = img
         else:
             for cam_name in self.camera_names:
                 # new approach TODO with cropped mask and 3 channel images using RGB pretrained weights again maybe?
