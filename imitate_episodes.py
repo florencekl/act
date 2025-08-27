@@ -21,6 +21,7 @@ import platform
 from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
 from deepdrr_simulation_platform import EpisodeData, calculate_distances, load_config, SimulationEnvironment
 from deepdrr_simulation_platform.sim_environment import centroid_heatmap
+from deepdrr_simulation_platform._data_validation import validate_trajectory_from_points, load_and_transform_mesh, validate_trajectory
 from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
@@ -119,7 +120,9 @@ def main(args):
         'num_episodes': num_episodes,
         'episodes_start': episodes_start,
         'action_dim': action_dim,
-        'resume_from_checkpoint': args.get('resume_from_checkpoint', None)
+        'resume_from_checkpoint': args.get('resume_from_checkpoint', None),
+        'warmup_epochs': args.get('warmup_epochs', 100),
+        'lr_decay_type': args.get('lr_decay_type', 'cosine')
     }
 
     if is_eval:
@@ -432,8 +435,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         episode_original = EpisodeData.from_hdf5(filename)
 
-        # if episode_original.episode < 2123:
-        #     continue
+        if episode_original.episode < 761:
+            continue
 
         # print(f"Case: {episode_original.case}")
 
@@ -470,6 +473,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             ap_masks = []
             ap_heatmap= None
             qpos_history = []
+
+            # query_frequency = num_rollouts - rollout_id
 
             ### evaluation loop
             if temporal_agg:
@@ -783,6 +788,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 lateral_cropped=lateral_cropped,
             ))
 
+            tag = env.cfg.paths.vertebra_directory \
+                + "/" + episode_original.case \
+                + "/" + env.cfg.paths.vertebra_subfolder \
+                + "/" + os.path.split(os.path.dirname(episode_original.annotation_path))[-1] + ".stl"
+
             # _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
             # calculate difference between 2 positions
 
@@ -797,6 +807,15 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             with open(csv_file, "a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([episode_original.episode, rollout_id, evaluation_distance])
+            
+            # # Load and transform mesh
+            # mesh = load_and_transform_mesh(tag, episode_original.world_from_anatomical)
+            
+            # # Validate using existing function
+            # valid_trajectory = validate_trajectory(qpos, mesh, 1, 0.25, 1)["is_valid"]
+            
+            # if valid_trajectory:
+            #     break
 
         # print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
         print(f"Distances: {evaluation_distance_list} argmin: {np.argmin(evaluation_distance_list)} -> distance {evaluation_distance_list[np.argmin(evaluation_distance_list)]}")
@@ -835,6 +854,39 @@ def train_bc(train_dataloader, val_dataloader, config):
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
     
+    # Learning rate scheduling setup
+    warmup_epochs = config.get('warmup_epochs', 100)  # Default warmup for 100 epochs
+    lr_decay_type = config.get('lr_decay_type', 'cosine')  # 'cosine', 'step', or 'none'
+    base_lr = policy_config['lr']
+    
+    # Create learning rate scheduler with warmup + decay
+    def lr_lambda(current_epoch):
+        if current_epoch < warmup_epochs:
+            # Linear warmup: gradually increase from 0 to 1
+            return current_epoch / warmup_epochs
+        else:
+            if lr_decay_type == 'cosine':
+                # Cosine annealing after warmup
+                import math
+                progress = (current_epoch - warmup_epochs) / (num_epochs - warmup_epochs)
+                return 0.5 * (1 + math.cos(math.pi * progress))
+            elif lr_decay_type == 'step':
+                # Step decay: reduce LR by factor of 0.1 every 1000 epochs after warmup
+                steps = (current_epoch - warmup_epochs) // 1000
+                return 0.1 ** steps
+            else:  # lr_decay_type == 'none'
+                # No decay after warmup, maintain constant LR
+                return 1.0
+    
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
+    # Log the learning rate schedule info
+    print(f"Learning rate schedule:")
+    print(f"  Base LR: {base_lr}")
+    print(f"  Warmup epochs: {warmup_epochs}")
+    print(f"  Decay type: {lr_decay_type}")
+    print(f"  Total epochs: {num_epochs}")
+    
     # Initialize training state
     start_epoch = 0
     train_history = []
@@ -859,6 +911,15 @@ def train_bc(train_dataloader, val_dataloader, config):
                 validation_history = checkpoint.get('validation_history', [])
                 min_val_loss = checkpoint.get('min_val_loss', np.inf)
                 best_ckpt_info = checkpoint.get('best_ckpt_info', None)
+                
+                # Load scheduler state if available
+                if 'scheduler_state_dict' in checkpoint:
+                    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                else:
+                    # If no scheduler state, manually set the scheduler to the correct epoch
+                    for _ in range(start_epoch):
+                        scheduler.step()
+                
                 print(f"Loaded full checkpoint from epoch {start_epoch-1}, min_val_loss: {min_val_loss}")
             else:
                 # Just model weights
@@ -899,6 +960,10 @@ def train_bc(train_dataloader, val_dataloader, config):
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
         
+        # Step the learning rate scheduler
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        
         # Compute epoch training summary
         epoch_summary_train = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary_train['loss']
@@ -914,7 +979,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 log_dict[f'train_{k}'] = v.item()
             
             log_dict['epoch'] = epoch
-            log_dict['learning_rate'] = optimizer.param_groups[0]['lr']
+            log_dict['learning_rate'] = current_lr
             log_dict['best_val_loss'] = min_val_loss
             
             wandb.log(log_dict, step=epoch)
@@ -926,6 +991,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 'epoch': epoch,
                 'model_state_dict': policy.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'train_history': train_history,
                 'validation_history': validation_history,
                 'min_val_loss': min_val_loss,
@@ -955,6 +1021,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         'epoch': best_epoch,
         'model_state_dict': policy.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
         'train_history': train_history,
         'validation_history': validation_history,
         'min_val_loss': min_val_loss,
@@ -1026,5 +1093,9 @@ if __name__ == '__main__':
     
     # for resuming training
     parser.add_argument('--resume_from_checkpoint', action='store', type=str, help='path to checkpoint to resume training from', default=None)
+    
+    # for learning rate scheduling
+    parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=100)
+    parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='cosine', choices=['cosine', 'step', 'none'])
     
     main(vars(parser.parse_args()))
