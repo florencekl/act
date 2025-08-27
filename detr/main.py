@@ -67,6 +67,8 @@ def get_args_parser():
     # for resuming training
     parser.add_argument('--resume_from_checkpoint', action='store', type=str, help='path to checkpoint to resume training from', default=None)
     parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
+    parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=250, required=False)
+    parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='cosine', choices=['cosine', 'step', 'none'], required=False)
     
     return parser
 

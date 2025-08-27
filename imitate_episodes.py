@@ -354,7 +354,8 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
             annotation,
             env.anterior_in_world,
             ap_translations=episode.ap_translations,
-            lateral_translations=episode.lateral_translations
+            lateral_translations=episode.lateral_translations,
+            randomize=False
         )
     else:
         # print(episode.ap_translations)
@@ -364,9 +365,11 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
             annotation,
             geo.Vector3D(episode.ap_direction),
             ap_translations=episode.ap_translations,
-            lateral_translations=episode.lateral_translations
+            lateral_translations=episode.lateral_translations,
+            randomize=False,
+            lateral_direction=geo.Vector3D(episode.lateral_direction) if episode.lateral_direction is not None else None
         )
-        print(episode.ct_offset)
+        # print(episode.ct_offset)
         ap_view["point"] += geo.vector(list(episode.ct_offset))
         lateral_view["point"] += geo.vector(list(episode.ct_offset))
 
@@ -1095,7 +1098,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume_from_checkpoint', action='store', type=str, help='path to checkpoint to resume training from', default=None)
     
     # for learning rate scheduling
-    parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=100)
+    parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=250)
     parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='cosine', choices=['cosine', 'step', 'none'])
     
     main(vars(parser.parse_args()))

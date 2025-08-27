@@ -143,6 +143,16 @@ SIM_TASK_CONFIGS = {
         'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.9_cropped/valid_episodes',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v1.9_cropped/TEST',
     },
+    'NMDID_v2.0': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.0',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.0',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.0',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.0/TEST',
+    },
 }
 
 ### Simulation envs fixed constants
