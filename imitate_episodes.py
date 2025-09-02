@@ -438,8 +438,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         episode_original = EpisodeData.from_hdf5(filename)
 
-        # if episode_original.episode < 761:
-        #     continue
+        if episode_original.episode < 1964:
+            continue
 
         # print(f"Case: {episode_original.case}")
 

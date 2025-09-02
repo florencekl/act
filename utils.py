@@ -99,18 +99,15 @@ class EpisodicDataset(torch.utils.data.Dataset):
             start_ts = np.random.choice(episode_len)
 
         world_from_anatomical = root['annotations/world_from_anatomical'][()]
+
         # get observation at start_ts only
         qpos = root['/observations/qpos'][start_ts]
         qvel = root['/observations/qvel'][start_ts]
         image_dict = dict()
-        # heatmap_dict = dict()
         
         # Load annotations and projection matrices
         annotation_start = root['/annotations/start'][()]
         annotation_end = root['/annotations/end'][()]
-        # projection_matrices = {}
-        # for cam_name in self.camera_names:
-        #     projection_matrices[cam_name] = root[f'/observations/projection_matrices/{cam_name}'][()]
 
         target_size = (256, 256)  # or (64, 64) depending on your preference
         
@@ -118,45 +115,25 @@ class EpisodicDataset(torch.utils.data.Dataset):
             for cam_name in self.camera_names:
                 # new approach TODO with cropped mask and 3 channel images
                 img = root[f'/observations/images/{cam_name}'][start_ts]
-            
-                # Resize image if it doesn't match target size
-                if img.shape[:2] != target_size:
-                    pil_img = Image.fromarray(img)
-                    img = np.array(pil_img.resize(target_size, Image.BILINEAR))
 
-                # for normal backbone TODO
+                image_dict[cam_name] = self.augmentation_func(img)
+                # print(np.shape(image_dict[cam_name]))
+                
+                # # Resize image if it doesn't match target size
+                # if img.shape[:2] != target_size:
+                #     pil_img = Image.fromarray(img)
+                #     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+
+                # # for normal backbone TODO
                 # image_dict[cam_name] = self.augmentation_func(np.array([img, img, img]).transpose(1, 2, 0))
-                image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
-
-                # for xrv backbone
-                # img = img[..., None]
-                # image_dict[cam_name] = img
         else:
             for cam_name in self.camera_names:
-                # new approach TODO with cropped mask and 3 channel images using RGB pretrained weights again maybe?
-
-
-                # current approach TODO
                 images = root[f'/observations/images/{cam_name}'][start_ts]
                 masks = root[f'/observations/masks/{cam_name}'][start_ts].astype(np.float32)
                 masks = masks / 255.0  # Normalize masks to [0, 1]
                 heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
                 image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
 
-
-                # lateral_masks = np.array(masks['lateral'])
-                # shape = root[f'/observations/masks/{cam_name}'].attrs["original_shape"]
-                # masks = np.unpackbits(root[f'/observations/masks/{cam_name}'][:])[:np.prod(shape)].reshape(shape)[start_ts]
-                # print(f"np.shape(images): {np.shape(images)}")
-                # print(f"np.shape(image_dict[{cam_name}]): {np.shape(image_dict[cam_name])}")
-                # print(f"np.min(image_dict[cam_name]): {np.min(image_dict[cam_name])}, np.max(image_dict[cam_name]): {np.max(image_dict[cam_name])}")
-                # TODO create PIL rgb image from FULL DICTIONRAY ENTRY * 255 to uint8
-                # from PIL import Image
-                # img = Image.fromarray((image_dict[cam_name] * 255).astype(np.uint8), mode='RGB')
-                # img.save(f'/data/flora/vertebroplasty_training/NMDID_v1_11_action_pretraining/{cam_name}_image.png')
-
-
-                # heatmap_dict[cam_name] = root[f'/observations/images/{cam_name}_heatmap'][()]
         # get all actions after and including start_ts
         if is_sim:
             action = root['/action'][start_ts:]
@@ -184,12 +161,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
         for cam_name in self.camera_names:
             img = image_dict[cam_name].astype(np.float32)  # Ensure float32
             all_cam_images.append(img)
-            
-            # TODO DEBUG if you want to visualize heatmaps and images that we use for training
-            # from visualize_heatmaps import visualize_images_and_heatmaps
-            # visualize_images_and_heatmaps(image_dict, heatmap_dict, 0, 0)
+
         all_cam_images = np.stack(all_cam_images, axis=0)
-        # print(f"np.shape(all_cam_images): {np.shape(all_cam_images)}")
 
         # construct observations
         image_data = torch.from_numpy(all_cam_images).float()  # Explicitly convert to float32
@@ -329,8 +302,8 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         # construct dataset and dataloader
         train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
         val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=2, prefetch_factor=2, persistent_workers=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=2, prefetch_factor=2, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 

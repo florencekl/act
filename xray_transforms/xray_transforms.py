@@ -1,5 +1,6 @@
 import random
 # from mmdet.registry import TRANSFORMS
+from PIL import Image
 
 from typing import Tuple, Union
 import albumentations as A
@@ -13,7 +14,7 @@ import pdb
 import json
 import os.path as osp
 
-def build_augmentation(img: np.ndarray) -> np.ndarray:
+def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256)) -> np.ndarray:
     '''
     Required keys:
         - img
@@ -23,6 +24,15 @@ def build_augmentation(img: np.ndarray) -> np.ndarray:
         
     '''
     # img = results["img"]
+    
+    # Resize image if it doesn't match target size
+    if target_size is not None and img.shape[:2] != target_size:
+        pil_img = Image.fromarray(img)
+        img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+    
+    # Convert to 3-channel if needed (for normal backbone)
+    if len(img.shape) == 2 or img.shape[2] == 1:
+        img = np.array([img, img, img]).transpose(1, 2, 0) if len(img.shape) == 2 else np.repeat(img, 3, axis=2)
     
     # kwargs = dict(
     #     bbox_params=A.BboxParams(
@@ -67,7 +77,7 @@ def build_augmentation(img: np.ndarray) -> np.ndarray:
 
     return augmented_img
 
-def build_augmentation_val(img: np.ndarray) -> np.ndarray:
+def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256, 256)) -> np.ndarray:
     '''
     Required keys:
         - img
@@ -78,11 +88,15 @@ def build_augmentation_val(img: np.ndarray) -> np.ndarray:
     '''
     # img = results["img"]
     
-    kwargs = dict(
-        bbox_params=A.BboxParams(
-            format="coco", label_fields=["category_ids"], min_visibility=0.1, min_area=10
-        ),
-    )
+    # Resize image if it doesn't match target size
+    if target_size is not None and img.shape[:2] != target_size:
+        pil_img = Image.fromarray(img)
+        img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+    
+    # Convert to 3-channel if needed (for normal backbone)
+    if len(img.shape) == 2 or img.shape[2] == 1:
+        img = np.array([img, img, img]).transpose(1, 2, 0) if len(img.shape) == 2 else np.repeat(img, 3, axis=2)
+
     transforms =  A.Compose(
         [
             # neglog(),
