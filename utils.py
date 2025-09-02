@@ -3,6 +3,7 @@ import torch
 import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
+from xray_transforms.xray_transforms import build_augmentation, build_augmentation_val
 from PIL import Image
 import glob
 
@@ -24,12 +25,13 @@ def discover_episode_files(dataset_dir, num_episodes=None, episodes_start=None):
     return sorted(episode_files)  # Sort for reproducible order
 
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, episode_files, dataset_dir, camera_names, norm_stats):
+    def __init__(self, episode_files, dataset_dir, camera_names, norm_stats, augmentation_func):
         super(EpisodicDataset).__init__()
         self.episode_files = episode_files  # List of filenames
         self.dataset_dir = dataset_dir
         self.camera_names = camera_names
         self.norm_stats = norm_stats
+        self.augmentation_func = augmentation_func
         self.is_sim = None
         
         # Cache for file handles to avoid repeated open/close
@@ -123,6 +125,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
 
                 # for normal backbone TODO
+                # image_dict[cam_name] = self.augmentation_func(np.array([img, img, img]).transpose(1, 2, 0))
                 image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
 
                 # for xrv backbone
@@ -299,8 +302,8 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         norm_stats = get_norm_stats(train_dir, train_files)
 
         # construct dataset and dataloader
-        train_dataset = EpisodicDataset(train_files, train_dir, camera_names, norm_stats)
-        val_dataset = EpisodicDataset(val_files, train_dir, camera_names, norm_stats)
+        train_dataset = EpisodicDataset(train_files, train_dir, camera_names, norm_stats, build_augmentation)
+        val_dataset = EpisodicDataset(val_files, train_dir, camera_names, norm_stats, build_augmentation_val)
     else:
         # Discover all HDF5 files in the dataset directory
         episode_files = discover_episode_files(dataset_dir, num_episodes, episodes_start)

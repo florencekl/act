@@ -128,7 +128,7 @@ def main(args):
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_200_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_900_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -363,7 +363,7 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
         # print(episode.ap_direction)
         ap_view, lateral_view = env.generate_views(
             annotation,
-            geo.Vector3D(episode.ap_direction),
+            ap_direction=geo.Vector3D(episode.ap_direction),
             ap_translations=episode.ap_translations,
             lateral_translations=episode.lateral_translations,
             randomize=False,
@@ -438,8 +438,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         episode_original = EpisodeData.from_hdf5(filename)
 
-        if episode_original.episode < 761:
-            continue
+        # if episode_original.episode < 761:
+        #     continue
 
         # print(f"Case: {episode_original.case}")
 
@@ -456,14 +456,16 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         query_frequency = policy_config['num_queries']
         if temporal_agg:
-            query_frequency = 5
-            # query_frequency = 1
+            # query_frequency = 5
+            query_frequency = 1
             num_queries = policy_config['num_queries']
+        
+        # print(query_frequency)
 
         regenerated_episodes = []
         evaluation_distance_list = []
 
-        num_rollouts = 10
+        num_rollouts = 1
         for rollout_id in range(num_rollouts):
             set_seed(rollout_id)
             # print(f"Rollout {rollout_id+1}/{num_rollouts}")
@@ -767,6 +769,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 line_annotation=annotation,
                 episode_number=episode_original.episode,
                 ap_direction=env.anterior_in_world if episode_original.ap_direction is None else episode_original.ap_direction,
+                lateral_direction=env.right_in_world if episode_original.lateral_direction is None else episode_original.lateral_direction,
                 source_to_detector_distance=env.device.source_to_detector_distance,
                 ap_translations=episode_original.ap_translations,
                 lateral_translations=episode_original.lateral_translations,
@@ -791,10 +794,10 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 lateral_cropped=lateral_cropped,
             ))
 
-            tag = env.cfg.paths.vertebra_directory \
-                + "/" + episode_original.case \
-                + "/" + env.cfg.paths.vertebra_subfolder \
-                + "/" + os.path.split(os.path.dirname(episode_original.annotation_path))[-1] + ".stl"
+            # tag = env.cfg.paths.vertebra_directory \
+            #     + "/" + episode_original.case \
+            #     + "/" + env.cfg.paths.vertebra_subfolder \
+            #     + "/" + os.path.split(os.path.dirname(episode_original.annotation_path))[-1] + ".stl"
 
             # _, _, _, _, _, _, distance = calculate_distances(episode_original, regenerated_episodes[-1])
             # calculate difference between 2 positions
@@ -825,7 +828,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
         os.makedirs(regenerated_folder, exist_ok=True)
-        env.save_episode(regenerated_episodes[np.argmin(evaluation_distance_list)], regenerated_folder, episode_original.episode)
+        env.save_episode(regenerated_episodes[np.argmin(evaluation_distance_list)], regenerated_folder, f"{episode_original.episode:04d}")
 
         episode_previous = episode_original
 
@@ -858,37 +861,37 @@ def train_bc(train_dataloader, val_dataloader, config):
     optimizer = make_optimizer(policy_class, policy)
     
     # Learning rate scheduling setup
-    warmup_epochs = config.get('warmup_epochs', 100)  # Default warmup for 100 epochs
-    lr_decay_type = config.get('lr_decay_type', 'cosine')  # 'cosine', 'step', or 'none'
-    base_lr = policy_config['lr']
+    # warmup_epochs = config.get('warmup_epochs', 100)  # Default warmup for 100 epochs
+    # lr_decay_type = config.get('lr_decay_type', 'cosine')  # 'cosine', 'step', or 'none'
+    # base_lr = policy_config['lr']
     
-    # Create learning rate scheduler with warmup + decay
-    def lr_lambda(current_epoch):
-        if current_epoch < warmup_epochs:
-            # Linear warmup: gradually increase from 0 to 1
-            return current_epoch / warmup_epochs
-        else:
-            if lr_decay_type == 'cosine':
-                # Cosine annealing after warmup
-                import math
-                progress = (current_epoch - warmup_epochs) / (num_epochs - warmup_epochs)
-                return 0.5 * (1 + math.cos(math.pi * progress))
-            elif lr_decay_type == 'step':
-                # Step decay: reduce LR by factor of 0.1 every 1000 epochs after warmup
-                steps = (current_epoch - warmup_epochs) // 1000
-                return 0.1 ** steps
-            else:  # lr_decay_type == 'none'
-                # No decay after warmup, maintain constant LR
-                return 1.0
+    # # Create learning rate scheduler with warmup + decay
+    # def lr_lambda(current_epoch):
+    #     if current_epoch < warmup_epochs:
+    #         # Linear warmup: gradually increase from 0 to 1
+    #         return current_epoch / warmup_epochs
+    #     else:
+    #         if lr_decay_type == 'cosine':
+    #             # Cosine annealing after warmup
+    #             import math
+    #             progress = (current_epoch - warmup_epochs) / (num_epochs - warmup_epochs)
+    #             return 0.5 * (1 + math.cos(math.pi * progress))
+    #         elif lr_decay_type == 'step':
+    #             # Step decay: reduce LR by factor of 0.1 every 1000 epochs after warmup
+    #             steps = (current_epoch - warmup_epochs) // 1000
+    #             return 0.1 ** steps
+    #         else:  # lr_decay_type == 'none'
+    #             # No decay after warmup, maintain constant LR
+    #             return 1.0
     
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     # Log the learning rate schedule info
-    print(f"Learning rate schedule:")
-    print(f"  Base LR: {base_lr}")
-    print(f"  Warmup epochs: {warmup_epochs}")
-    print(f"  Decay type: {lr_decay_type}")
-    print(f"  Total epochs: {num_epochs}")
+    # print(f"Learning rate schedule:")
+    # print(f"  Base LR: {base_lr}")
+    # print(f"  Warmup epochs: {warmup_epochs}")
+    # print(f"  Decay type: {lr_decay_type}")
+    # print(f"  Total epochs: {num_epochs}")
     
     # Initialize training state
     start_epoch = 0
@@ -908,20 +911,20 @@ def train_bc(train_dataloader, val_dataloader, config):
                 # Full checkpoint with training state
                 policy.load_state_dict(checkpoint['model_state_dict'])
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                start_epoch = checkpoint.get('epoch', 0) + 1
-                train_history = checkpoint.get('train_history', [])
+                # start_epoch = checkpoint.get('epoch', 0) + 1
+                # train_history = checkpoint.get('train_history', [])
                 # print(train_history)
                 validation_history = checkpoint.get('validation_history', [])
                 min_val_loss = checkpoint.get('min_val_loss', np.inf)
                 best_ckpt_info = checkpoint.get('best_ckpt_info', None)
                 
-                # Load scheduler state if available
-                if 'scheduler_state_dict' in checkpoint:
-                    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                else:
-                    # If no scheduler state, manually set the scheduler to the correct epoch
-                    for _ in range(start_epoch):
-                        scheduler.step()
+                # # Load scheduler state if available
+                # if 'scheduler_state_dict' in checkpoint:
+                #     scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                # else:
+                #     # If no scheduler state, manually set the scheduler to the correct epoch
+                #     for _ in range(start_epoch):
+                #         scheduler.step()
                 
                 print(f"Loaded full checkpoint from epoch {start_epoch-1}, min_val_loss: {min_val_loss}")
             else:
@@ -963,9 +966,9 @@ def train_bc(train_dataloader, val_dataloader, config):
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
         
-        # Step the learning rate scheduler
-        scheduler.step()
-        current_lr = scheduler.get_last_lr()[0]
+        # # Step the learning rate scheduler
+        # scheduler.step()
+        # current_lr = scheduler.get_last_lr()[0]
         
         # Compute epoch training summary
         epoch_summary_train = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
@@ -982,7 +985,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 log_dict[f'train_{k}'] = v.item()
             
             log_dict['epoch'] = epoch
-            log_dict['learning_rate'] = current_lr
+            # log_dict['learning_rate'] = current_lr
             log_dict['best_val_loss'] = min_val_loss
             
             wandb.log(log_dict, step=epoch)
@@ -994,7 +997,7 @@ def train_bc(train_dataloader, val_dataloader, config):
                 'epoch': epoch,
                 'model_state_dict': policy.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
+                # 'scheduler_state_dict': scheduler.state_dict(),
                 'train_history': train_history,
                 'validation_history': validation_history,
                 'min_val_loss': min_val_loss,
@@ -1024,7 +1027,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         'epoch': best_epoch,
         'model_state_dict': policy.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
+        # 'scheduler_state_dict': scheduler.state_dict(),
         'train_history': train_history,
         'validation_history': validation_history,
         'min_val_loss': min_val_loss,
@@ -1098,7 +1101,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume_from_checkpoint', action='store', type=str, help='path to checkpoint to resume training from', default=None)
     
     # for learning rate scheduling
-    parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=250)
-    parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='cosine', choices=['cosine', 'step', 'none'])
+    parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=0)
+    parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='none', choices=['cosine', 'step', 'none'])
     
     main(vars(parser.parse_args()))

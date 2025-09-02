@@ -256,8 +256,8 @@ def build_backbone(args):
         model.num_channels = backbone.num_channels
         return model
     else:
-        input_channels = getattr(args, 'input_channels', 3)  # Default to 3 if not specified
-        backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, input_channels)
+        # input_channels = getattr(args, 'input_channels', 3)  # Default to 3 if not specified
+        backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
         model = Joiner(backbone, position_embedding)
         model.num_channels = backbone.num_channels
         return model
