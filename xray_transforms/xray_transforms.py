@@ -119,6 +119,57 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
     # results["img"] = augmented_img
     return augmented_img
 
+def build_replay_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256, 256), replay = None, lambda_transforms = None):
+    '''
+    Required keys:
+        - img
+        - replay
+        
+    Modified keys:
+        - img
+    '''
+
+    transforms =  A.ReplayCompose(
+        [
+            # neglog(),
+            A.InvertImg(always_apply=True),
+            mixture_window(keep_original=True, model="kmeans"),
+            A.InvertImg(p=0.5),
+            clahe(p=0.3),
+        ],
+    )
+    
+    # Resize image if it doesn't match target size
+    if target_size is not None and img.shape[:2] != target_size:
+        pil_img = Image.fromarray(img)
+        img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+    
+    # Convert to 3-channel if needed (for normal backbone)
+    if len(img.shape) == 2 or img.shape[2] == 1:
+        img = np.array([img, img, img]).transpose(1, 2, 0) if len(img.shape) == 2 else np.repeat(img, 3, axis=2)
+
+    # if replay is None:
+    #     data = transforms(image=img)
+    #     replay = data['replay']
+    #     lambda_transforms = {lam.name: lam for lam in transforms if isinstance(lam, A.Lambda)}
+    #     augmented_image = data["image"]
+
+    #     # augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
+    #     # data = augs(force_apply=True, image=img)
+    #     # augmented_image = data["image"]
+
+    #     # Create lambda_transforms dictionary to handle non-serializable transforms
+    #     # augmented_image = transforms.replay(image=img, replay=replay)
+    #     # **replay['replay']
+    # else:
+    #     augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
+    #     data = augs(force_apply=True, image=img)
+    #     augmented_image = data["image"]
+
+    # results["img"] = augmented_img
+    augmented_image = img
+    return augmented_image, replay, lambda_transforms
+
 def build_augmentation_real_xrays(results: dict) -> dict:
     '''
     Required keys:
