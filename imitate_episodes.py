@@ -630,7 +630,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
                             # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
 
-                            ap_images.append(build_replay_augmentation_val(ap_image, replay=replay, lambda_transforms=lambda_augs)[0])
+                            ap_images.append(ap_image)
                             # ap_masks.append(masks["cannula"][0])
                             # ap_heatmap = (centroid_heatmap(masks[tag][0]))
 
@@ -648,7 +648,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             end_x = min(start_x + crop_w, w)
                             end_y = min(start_y + crop_h, h)
 
-                            ap_cropped.append(build_replay_augmentation_val(ap_image[start_y:end_y, start_x:end_x], replay=replay, lambda_transforms=lambda_augs)[0])
+                            ap_cropped.append(ap_image[start_y:end_y, start_x:end_x])
 
                             # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
                             ap_projection = env.device.get_camera_projection()
@@ -668,7 +668,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             lateral_image = 0.5 * xrays["lateral_view"] + 0.5 * lateral_image
                             lateral_image = env.histogram_matching(lateral_image, xrays["lateral_view"])
 
-                            lateral_images.append(build_replay_augmentation_val(lateral_image, replay=replay, lambda_transforms=lambda_augs)[0])
+                            lateral_images.append(lateral_image)
                             # lateral_masks.append(masks["cannula"][0])
                             # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
 
@@ -686,17 +686,17 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             end_x = min(start_x + crop_w, w)
                             end_y = min(start_y + crop_h, h)
 
-                            lateral_cropped.append(build_replay_augmentation_val(lateral_image[start_y:end_y, start_x:end_x], replay=replay, lambda_transforms=lambda_augs)[0])
+                            lateral_cropped.append(lateral_image[start_y:end_y, start_x:end_x])
 
                             lateral_projection = env.device.get_camera_projection()
                             
-                            image_dict['ap'] = ap_images[-1]
-                            image_dict['lateral'] = lateral_images[-1]
+                            image_dict['ap'] = build_replay_augmentation_val(ap_images[-1], replay=replay, lambda_transforms=lambda_augs)[0]
+                            image_dict['lateral'] = build_replay_augmentation_val(lateral_images[-1], replay=replay, lambda_transforms=lambda_augs)[0]
                             # image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
                             # image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
-                            
-                            image_dict['ap_cropped'] = ap_cropped[-1]
-                            image_dict['lateral_cropped'] = lateral_cropped[-1]
+
+                            image_dict['ap_cropped'] = build_replay_augmentation_val(ap_cropped[-1], replay=replay, lambda_transforms=lambda_augs)[0]
+                            image_dict['lateral_cropped'] = build_replay_augmentation_val(lateral_cropped[-1], replay=replay, lambda_transforms=lambda_augs)[0]
                             # crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
                             # image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
                             # crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
