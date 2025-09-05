@@ -33,6 +33,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.norm_stats = norm_stats
         self.augmentation_func = augmentation_func
         self.is_sim = None
+
+        self.start_ts = None
         
         # Cache for file handles to avoid repeated open/close
         self._file_cache = {}
@@ -93,10 +95,10 @@ class EpisodicDataset(torch.utils.data.Dataset):
         is_sim = root.attrs['sim']
         original_action_shape = root['/action'].shape
         episode_len = original_action_shape[0]
-        if sample_full_episode:
-            start_ts = 0
-        else:
+        if self.start_ts is None:
             start_ts = np.random.choice(episode_len)
+        else:
+            start_ts = self.start_ts
 
         world_from_anatomical = root['annotations/world_from_anatomical'][()]
 

@@ -312,8 +312,6 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
         env.anterior_in_world = ct.world_from_anatomical @ kg.vector(0, 1, 0)
         env.superior_in_world = ct.world_from_anatomical @ kg.vector(0, 0, 1)
     tools = env.load_tools()
-
-    # print(ct.enabled)
     
     tag = cfg.paths.vertebra_directory \
         + "/" + episode.case \
@@ -323,12 +321,8 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
     env.tools[tag] = mesh
     env.tools[tag].enabled = False
-    # print(f"Loaded tag: {tag}")
-    print(f"Initializing projector")
     env.initialize_projector()
     env.load_screws(6)
-
-    # print(episode.source_to_detector_distance[0])
     env.device.source_to_detector_distance = int(episode.source_to_detector_distance[0])
 
     if "_R" in episode.annotation_path:
@@ -351,9 +345,7 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     # TODO this randomization is not working right now
     env.randomize_background(annotation.startpoint_in_world)
 
-    # print(f"{episode.lateral_translate_ap}, {episode.superior_translate_ap}, {episode.lateral_translate_lateral}, {episode.superior_translate_lateral}")
     # Generate camera views
-    # TODO this needs to be
     if episode.ap_direction is None:
         ap_view, lateral_view = env.generate_views(
             annotation,
@@ -363,9 +355,6 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
             randomize=False
         )
     else:
-        # print(episode.ap_translations)
-        # print(episode.lateral_translations)
-        # print(episode.ap_direction)
         ap_view, lateral_view = env.generate_views(
             annotation,
             ap_direction=geo.Vector3D(episode.ap_direction),
@@ -374,7 +363,6 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
             randomize=False,
             # lateral_direction=geo.Vector3D(episode.lateral_direction) if episode.lateral_direction is not None else None
         )
-        # print(episode.ct_offset)
         ap_view["point"] += geo.vector(list(episode.ct_offset))
         lateral_view["point"] += geo.vector(list(episode.ct_offset))
 
@@ -400,7 +388,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
-    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps * 4) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -422,9 +410,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         stats = pickle.load(f)
     # print(stats)
 
-
-    # files = [f"/data/flora/vertebroplasty_data/NMDID_subclustering_v1/episode_{i}.hdf5" for i in range(400, 500)]
-    # files = [f"/data2/flora/vertebroplasty_data/vertebroplasty_imitation_custom_channels_xray_mask_heatmap_fixed/episode_{i}.hdf5" for i in range(4082, 4101)]
     files = [f"/data_vertebroplasty/flora/vertebroplasty_data/NMDID_subclustering_v1.2_2D_action+distance_8_vector/episode_{i}.hdf5" for i in range(120, 150)]
     if dataset_dir is not None:
         files = sorted(glob.glob(os.path.join(dataset_dir, '*.hdf5')))
@@ -446,8 +431,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         # if episode_original.episode <= 100:
         #     continue
 
-        # print(f"Case: {episode_original.case}")
-
         if episode_previous is not None and episode_previous.case == episode_original.case and ct is not None:
             env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original, ct=ct)
         else:
@@ -460,21 +443,19 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
         query_frequency = policy_config['num_queries']
+        # query_frequency = 20
         # query_frequency = 1
         if temporal_agg:
             # query_frequency = 5
             query_frequency = 1
             num_queries = policy_config['num_queries']
-        
-        # print(query_frequency)
-
+    
         regenerated_episodes = []
         evaluation_distance_list = []
 
         num_rollouts = 1
         for rollout_id in range(num_rollouts):
             set_seed(rollout_id)
-            # print(f"Rollout {rollout_id+1}/{num_rollouts}")
             lateral_images = []
             lateral_cropped = []
             lateral_masks = []
@@ -503,11 +484,9 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 image_dict = dict()
                 # heatmap_dict = dict()
                 if 'ap_cropped' in episode_original.images:
-                    # print("Using AP cropped images")
                     for cam_name in config['camera_names']:
                         # new approach TODO with cropped mask and 3 channel images
                         img = episode_original.images[cam_name][starting_timestep]
-                        # print(img.shape)
                         # if img.shape[:2] != target_size:
                         #     pil_img = Image.fromarray(img)
                         #     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
@@ -522,11 +501,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             mask,
                             episode_original.heatmaps[cam_name]
                         ]).transpose(1, 2, 0)
-                        # print(np.shape(image_dict[cam_name]))
-                        # print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]))
 
                 # TODO get new starting qpos from the sim environment directly
-                # print(f"starting qpos: {episode_original.qpos[starting_timestep]}")
                 qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
                 target_qpos = qpos.copy()
 
@@ -563,7 +539,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     env.tools.get(tag).enabled = False
                     env.projector.device.set_view(**view)
                     image = env.projector()
-                    print(np.shape(image), np.min(image), np.max(image))
                     image = (image - image.min()) / (image.max() - image.min() + 1e-8)
                     xrays[view_name] = image
                     env.tools.get(tag).enabled = True
@@ -576,7 +551,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                 with tqdm(range(max_timesteps), desc="Timesteps") as pbar:
                     for t in pbar:
-                        # print(t)
                         # # Dynamically compute the query frequency based on the current timestep "t"
                         # if t < 0.5 * max_timesteps:
                         #     query_frequency = 10
@@ -622,13 +596,9 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                                 rotation=rotation,
                                 generate_masks=False,
                             )
-                            # print('generated image')
-                            # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
                             ap_image = (ap_image - ap_image.min()) / (ap_image.max() - ap_image.min() + 1e-8)
-                            # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
                             ap_image = 0.5 * xrays["ap_view"] + 0.5 * ap_image
                             ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
-                            # print(np.shape(ap_image), np.min(ap_image), np.max(ap_image))
 
                             ap_images.append(ap_image)
                             # ap_masks.append(masks["cannula"][0])
@@ -730,14 +700,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
 
                         # ! qvel
-                        # print(qvel)
                         qpos = pre_process(qvel)
                         qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
 
                         ### query policy
                         if config['policy_class'] == "ACT":
                             if t % query_frequency == 0:
-                                # print(query_frequency, t, (t % query_frequency))
                                 all_actions = policy(qpos, image_data)
                             if temporal_agg:
                                 all_time_actions[[t], t:t+num_queries] = all_actions
@@ -762,7 +730,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         target_qpos = action
                         qvel = target_qpos
 
-                        # print(qvel, start_position, target_qpos)
                         # ! qvel delta relative position
                         start_position = start_position + target_qpos
                         target_qpos = start_position
@@ -776,13 +743,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
             # Convert to numpy arrays
             ap_images = np.array(ap_images)
-            # print(np.shape(ap_images), np.min(ap_images), np.max(ap_images))
             lateral_images = np.array(lateral_images)
-            # print(np.shape(lateral_images), np.min(lateral_images), np.max(lateral_images))
-            
-            # print(f"Generated {len(ap_images)} images")
-            # print(f"AP image shape: {ap_images.shape}")
-            # print(f"Lateral image shape: {lateral_images.shape}")
 
             qvel = np.vstack(([0] * config['action_dim'], np.diff(qpos_history, axis=0)))
             qvel = qvel.tolist()
@@ -832,8 +793,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
             evaluation_distance = np.linalg.norm(geo.point(goal_position) - geo.point(reached_goal_position))
 
-            # print(f"Distance for rollout {rollout_id}: {evaluation_distance}")
-
             evaluation_distance_list.append(evaluation_distance)
             csv_file = os.path.join(config['ckpt_dir'], "regenerated_episodes", "_episode_distances.csv")
             with open(csv_file, "a", newline="") as f:
@@ -849,7 +808,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             # if valid_trajectory:
             #     break
 
-        # print(f"Average distance: {np.mean(distances)} (std: {np.std(distances)})")
         print(f"Timestamp: {datetime.now()} Distances: {evaluation_distance_list} argmin: {np.argmin(evaluation_distance_list)} -> distance {evaluation_distance_list[np.argmin(evaluation_distance_list)]}")
 
         regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
@@ -867,7 +825,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    # print(f'Forward pass with {qpos_data.shape}, {image_data.shape}, {action_data.shape}, {is_pad.shape}')
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
 
@@ -911,13 +868,6 @@ def train_bc(train_dataloader, val_dataloader, config):
     #             return 1.0
     
     # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    
-    # Log the learning rate schedule info
-    # print(f"Learning rate schedule:")
-    # print(f"  Base LR: {base_lr}")
-    # print(f"  Warmup epochs: {warmup_epochs}")
-    # print(f"  Decay type: {lr_decay_type}")
-    # print(f"  Total epochs: {num_epochs}")
     
     # Initialize training state
     start_epoch = 0
@@ -969,9 +919,11 @@ def train_bc(train_dataloader, val_dataloader, config):
         with torch.inference_mode():
             policy.eval()
             epoch_dicts = []
-            for batch_idx, data in enumerate(val_dataloader):
-                forward_dict = forward_pass(data, policy)
-                epoch_dicts.append(forward_dict)
+            for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
+                val_dataloader.dataset.start_ts = start_ts
+                for batch_idx, data in enumerate(val_dataloader):
+                    forward_dict = forward_pass(data, policy)
+                    epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
             validation_history.append(epoch_summary)
  
@@ -983,14 +935,25 @@ def train_bc(train_dataloader, val_dataloader, config):
         # training
         policy.train()
         optimizer.zero_grad()
-        for batch_idx, data in enumerate(train_dataloader):
-            forward_dict = forward_pass(data, policy)
-            # backward
-            loss = forward_dict['loss']
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            train_history.append(detach_dict(forward_dict))
+        for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
+                train_dataloader.dataset.start_ts = start_ts + np.random.choice(config['episode_len'])
+                for batch_idx, data in enumerate(train_dataloader):
+                    forward_dict = forward_pass(data, policy)
+                    # backward
+                    loss = forward_dict['loss']
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    train_history.append(detach_dict(forward_dict))
+
+        # for batch_idx, data in enumerate(train_dataloader):
+        #     forward_dict = forward_pass(data, policy)
+        #     # backward
+        #     loss = forward_dict['loss']
+        #     loss.backward()
+        #     optimizer.step()
+        #     optimizer.zero_grad()
+        #     train_history.append(detach_dict(forward_dict))
         
         # # Step the learning rate scheduler
         # scheduler.step()
@@ -1016,7 +979,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             
             wandb.log(log_dict, step=epoch)
 
-        if epoch % 100 == 0:
+        if epoch % 50 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             # Save full checkpoint with training state
             checkpoint = {
