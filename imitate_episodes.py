@@ -226,9 +226,13 @@ def main(args):
             columns=list(args.keys()),
             data=[list(args.values())]
         )}, commit=False)
-
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val, train_dir=train_dir, val_dir=val_dir)
-
+    
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, 
+                                                           episodes_start, camera_names, 
+                                                           batch_size_train, batch_size_val, 
+                                                           train_dir=train_dir, val_dir=val_dir, 
+                                                        #    episode_len=episode_len, chunk_size=policy_config['num_queries']
+                                                           )
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
         os.makedirs(ckpt_dir)
@@ -914,7 +918,10 @@ def train_bc(train_dataloader, val_dataloader, config):
     if use_wandb:
         wandb.watch(policy, log="all", log_freq=100)
     
-    for epoch in tqdm(range(start_epoch, num_epochs)):
+    # Initialize progress bar
+    pbar = tqdm(range(start_epoch, num_epochs), desc="Training")
+    
+    for epoch in pbar:
         # validation
         with torch.inference_mode():
             policy.eval()
@@ -935,25 +942,25 @@ def train_bc(train_dataloader, val_dataloader, config):
         # training
         policy.train()
         optimizer.zero_grad()
-        for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
-                train_dataloader.dataset.start_ts = start_ts + np.random.choice(config['episode_len'])
-                for batch_idx, data in enumerate(train_dataloader):
-                    forward_dict = forward_pass(data, policy)
-                    # backward
-                    loss = forward_dict['loss']
-                    loss.backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    train_history.append(detach_dict(forward_dict))
+        # for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
+        #         train_dataloader.dataset.start_ts = start_ts + np.random.choice(config['episode_len'])
+        #         for batch_idx, data in enumerate(train_dataloader):
+        #             forward_dict = forward_pass(data, policy)
+        #             # backward
+        #             loss = forward_dict['loss']
+        #             loss.backward()
+        #             optimizer.step()
+        #             optimizer.zero_grad()
+        #             train_history.append(detach_dict(forward_dict))
 
-        # for batch_idx, data in enumerate(train_dataloader):
-        #     forward_dict = forward_pass(data, policy)
-        #     # backward
-        #     loss = forward_dict['loss']
-        #     loss.backward()
-        #     optimizer.step()
-        #     optimizer.zero_grad()
-        #     train_history.append(detach_dict(forward_dict))
+        for batch_idx, data in enumerate(train_dataloader):
+            forward_dict = forward_pass(data, policy)
+            # backward
+            loss = forward_dict['loss']
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            train_history.append(detach_dict(forward_dict))
         
         # # Step the learning rate scheduler
         # scheduler.step()
@@ -962,6 +969,13 @@ def train_bc(train_dataloader, val_dataloader, config):
         # Compute epoch training summary
         epoch_summary_train = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
         epoch_train_loss = epoch_summary_train['loss']
+        
+        # Update progress bar with current losses
+        pbar.set_postfix({
+            'train_loss': f'{epoch_train_loss:.4f}',
+            'val_loss': f'{epoch_val_loss:.4f}',
+            'best_val': f'{min_val_loss:.4f}'
+        })
         
         # Log to wandb
         if use_wandb:

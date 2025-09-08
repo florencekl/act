@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import os
 import h5py
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, ConcatDataset
 from xray_transforms.xray_transforms import build_augmentation, build_augmentation_val
 from PIL import Image
 import glob
@@ -35,6 +35,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.is_sim = None
 
         self.start_ts = None
+        self.chunk_size = None
         
         # Cache for file handles to avoid repeated open/close
         self._file_cache = {}
@@ -92,112 +93,74 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # Use cached file handle instead of opening/closing every time
         root = self._get_file_handle(episode_filename)
         
-        is_sim = root.attrs['sim']
         original_action_shape = root['/action'].shape
         episode_len = original_action_shape[0]
-        if self.start_ts is None:
-            start_ts = np.random.choice(episode_len)
+
+        if self.chunk_size is not None:
+            start_ts_list = range(0, episode_len, self.chunk_size)
         else:
-            start_ts = self.start_ts
+            if self.start_ts is None:
+                start_ts_list = [np.random.choice(episode_len)]
+            else:
+                start_ts_list = [self.start_ts]
 
-        world_from_anatomical = root['annotations/world_from_anatomical'][()]
-
-        # get observation at start_ts only
-        qpos = root['/observations/qpos'][start_ts]
-        qvel = root['/observations/qvel'][start_ts]
-        image_dict = dict()
-        
-        # Load annotations and projection matrices
-        annotation_start = root['/annotations/start'][()]
-        annotation_end = root['/annotations/end'][()]
-
-        target_size = (256, 256)  # or (64, 64) depending on your preference
-        
-        if not 'observations/heatmaps' in root:
+        ret_image_data = []
+        ret_qpos_data = []
+        ret_action_data = []
+        ret_is_pad = []
+        for start_ts in start_ts_list:
+            # get observation at start_ts only
+            qpos = root['/observations/qpos'][start_ts]
+            qvel = root['/observations/qvel'][start_ts]
+            image_dict = dict()
+            
             for cam_name in self.camera_names:
-                # new approach TODO with cropped mask and 3 channel images
                 img = root[f'/observations/images/{cam_name}'][start_ts]
-
                 image_dict[cam_name] = self.augmentation_func(img)
-                # print(np.shape(image_dict[cam_name]))
-                
-                # # Resize image if it doesn't match target size
-                # if img.shape[:2] != target_size:
-                #     pil_img = Image.fromarray(img)
-                #     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
 
-                # # for normal backbone TODO
-                # image_dict[cam_name] = self.augmentation_func(np.array([img, img, img]).transpose(1, 2, 0))
-        else:
-            for cam_name in self.camera_names:
-                images = root[f'/observations/images/{cam_name}'][start_ts]
-                masks = root[f'/observations/masks/{cam_name}'][start_ts].astype(np.float32)
-                masks = masks / 255.0  # Normalize masks to [0, 1]
-                heatmap = np.array(root[f'/observations/heatmaps/{cam_name}'])
-                image_dict[cam_name] = np.array([images, masks, heatmap]).transpose(1, 2, 0)
-
-        # get all actions after and including start_ts
-        if is_sim:
             action = root['/action'][start_ts:]
             action_len = episode_len - start_ts
             qvel = root['/observations/qvel'][start_ts:]
             qvel_len = episode_len - start_ts
+
+            padded_action = np.zeros(original_action_shape, dtype=np.float32)
+            padded_action[:action_len] = action
+            padded_qvel = np.zeros(original_action_shape, dtype=np.float32)
+            padded_qvel[:qvel_len] = qvel
+            is_pad = np.zeros(episode_len)
+            is_pad[action_len:] = 1
+            qvel = root['/observations/qvel'][start_ts]
+
+            # new axis for different cameras
+            all_cam_images = []
+            
+            for cam_name in self.camera_names:
+                img = image_dict[cam_name].astype(np.float32)  # Ensure float32
+                all_cam_images.append(img)
+
+            all_cam_images = np.stack(all_cam_images, axis=0)
+
+            # construct observations
+            image_data = torch.from_numpy(all_cam_images).float()  # Explicitly convert to float32
+            qpos_data = torch.from_numpy(qpos).float()
+            is_pad = torch.from_numpy(is_pad).bool()
+            action_data = torch.from_numpy(padded_qvel).float()
+
+            # channel last -> channel first
+            image_data = torch.einsum('k h w c -> k c h w', image_data)
+
+            action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
+            qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
+
+            ret_image_data.append(image_data)
+            ret_qpos_data.append(qpos_data)
+            ret_action_data.append(action_data)
+            ret_is_pad.append(is_pad)
+
+        if self.chunk_size is not None:
+            return ret_image_data, ret_qpos_data, ret_action_data, ret_is_pad
         else:
-            action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
-            action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
-            qvel = root['/observations/qvel'][max(0, start_ts - 1):]
-            qvel_len = episode_len - max(0, start_ts - 1)
-
-        self.is_sim = is_sim
-        padded_action = np.zeros(original_action_shape, dtype=np.float32)
-        padded_action[:action_len] = action
-        padded_qvel = np.zeros(original_action_shape, dtype=np.float32)
-        padded_qvel[:qvel_len] = qvel
-        is_pad = np.zeros(episode_len)
-        is_pad[action_len:] = 1
-        qvel = root['/observations/qvel'][start_ts]
-
-        # new axis for different cameras
-        all_cam_images = []
-        
-        for cam_name in self.camera_names:
-            img = image_dict[cam_name].astype(np.float32)  # Ensure float32
-            all_cam_images.append(img)
-
-        all_cam_images = np.stack(all_cam_images, axis=0)
-
-        # construct observations
-        image_data = torch.from_numpy(all_cam_images).float()  # Explicitly convert to float32
-        qpos_data = torch.from_numpy(qpos).float()
-        # qvel_data = torch.from_numpy(qvel).float()
-        # action_data = torch.from_numpy(padded_action).float()
-        is_pad = torch.from_numpy(is_pad).bool()
-
-        # qvel!
-        # qpos_data = torch.from_numpy(qvel).float()
-        qvel_data = torch.from_numpy(qvel).float()
-        action_data = torch.from_numpy(padded_qvel).float()
-
-        # channel last -> channel first
-        image_data = torch.einsum('k h w c -> k c h w', image_data)
-        # Visualize the first image using PIL
-        # Convert tensor to numpy array and change from channel-first (C, H, W) to channel-last (H, W, C)
-        # img_np = image_data[0].permute(1, 2, 0).numpy()
-        # Assuming the image data is in range [0,1], scale it to [0,255]
-        # img_np = (img_np * 255).astype('uint8')
-        # pil_img = Image.fromarray(img_np)
-        # pil_img.save("/data_vertebroplasty/flora/vertebroplasty_training/NMDID_v1.5_3D_delta/getitem.png")
-
-        # normalize image and change dtype to float
-        # TODO maybe train on qvel data instead?
-        # image_data = image_data / 255.0
-        # image_data = image_data
-        # print(np.shape(qvel_data), np.shape(qpos_data), np.shape(action_data), np.shape(image_data), np.shape(is_pad))
-        action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
-        qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
-        # qvel_data = (qvel_data - self.norm_stats["qvel_mean"]) / self.norm_stats["qvel_std"]
-
-        return image_data, qpos_data, action_data, is_pad
+            return image_data[0], qpos_data[0], action_data[0], is_pad[0]
 
 
 def get_norm_stats(dataset_dir, episode_files):
@@ -232,14 +195,6 @@ def get_norm_stats(dataset_dir, episode_files):
     qvel_std = all_qvel_data.std(dim=[0, 1], keepdim=True)
     qvel_std = torch.clip(qvel_std, 1e-2, np.inf) # clipping
 
-    # stats = {"action_mean": action_mean.numpy().squeeze(), "action_std": action_std.numpy().squeeze(),
-    #          "qpos_mean": qpos_mean.numpy().squeeze(), "qpos_std": qpos_std.numpy().squeeze(),
-    #          "example_qpos": qpos}
-    
-    # qvel
-    # stats = {"action_mean": qvel_mean.numpy().squeeze(), "action_std": qvel_std.numpy().squeeze(),
-    #          "qpos_mean": qvel_mean.numpy().squeeze(), "qpos_std": qvel_std.numpy().squeeze(),
-    #          "example_qpos": qpos}
     stats = {"action_mean": qvel_mean.numpy().squeeze(), "action_std": qvel_std.numpy().squeeze(),
              "qpos_mean": qpos_mean.numpy().squeeze(), "qpos_std": qpos_std.numpy().squeeze(),
              "example_qpos": qpos}
@@ -247,27 +202,32 @@ def get_norm_stats(dataset_dir, episode_files):
     return stats
 
 
-def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val, train_dir=None, val_dir=None):
+def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_size_train, batch_size_val, train_dir=None, val_dir=None, episode_len=None, chunk_size=None):
     print(f'\nData from: {dataset_dir}\n')
 
     if train_dir is not None and val_dir is not None:
-        episode_files = discover_episode_files(train_dir, num_episodes, episodes_start)
+        # episode_files = discover_episode_files(train_dir, num_episodes, episodes_start)
+
         # val_files = discover_episode_files(val_dir, num_episodes, episodes_start)
         # episode_files = train_files + val_files
+        
+        train_files = discover_episode_files(train_dir, num_episodes, episodes_start)
+        val_files = discover_episode_files(val_dir, num_episodes, episodes_start)
+        episode_files = train_files + val_files
 
         # num_episodes = len(train_files) + len(val_files)
         num_episodes = len(episode_files)
         
         # TODO maybe change this again, but currently train-validation seems terrible and optimizing badly
         # obtain train test split
-        train_ratio = 0.8
-        shuffled_indices = np.random.permutation(num_episodes)
-        train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
-        val_indices = shuffled_indices[int(train_ratio * num_episodes):]
+        # train_ratio = 0.8
+        # shuffled_indices = np.random.permutation(num_episodes)
+        # train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
+        # val_indices = shuffled_indices[int(train_ratio * num_episodes):]
         
         # Split episode files based on indices
-        train_files = [episode_files[i] for i in train_indices]
-        val_files = [episode_files[i] for i in val_indices]
+        # train_files = [episode_files[i] for i in train_indices]
+        # val_files = [episode_files[i] for i in val_indices]
 
         print(f'Found {len(train_files)} training files and {len(val_files)} validation files.')
         if len(train_files) == 0 or len(val_files) == 0:
@@ -278,7 +238,17 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
 
         # construct dataset and dataloader
         train_dataset = EpisodicDataset(train_files, train_dir, camera_names, norm_stats, build_augmentation)
-        val_dataset = EpisodicDataset(val_files, train_dir, camera_names, norm_stats, build_augmentation_val)
+        if episode_len is not None and chunk_size is not None:
+            datasets = []
+            for start in range(0, episode_len, chunk_size):
+                ds = EpisodicDataset(val_files, train_dir, camera_names, norm_stats, build_augmentation_val)
+                ds.start_ts = start
+                datasets.append(ds)
+                print(ds.start_ts)
+            print(datasets)
+            val_dataset = ConcatDataset(datasets)
+        else:
+            val_dataset = EpisodicDataset(val_files, val_dir, camera_names, norm_stats, build_augmentation_val)
     else:
         # Discover all HDF5 files in the dataset directory
         episode_files = discover_episode_files(dataset_dir, num_episodes, episodes_start)

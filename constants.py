@@ -158,7 +158,7 @@ SIM_TASK_CONFIGS = {
     'NMDID_v2.1': {
         'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir',
         'episode_start': 0,
-        'num_episodes': 0.25,
+        'num_episodes': 1.0,
         'episode_len': 200,
         'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
         'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir',
@@ -184,6 +184,16 @@ SIM_TASK_CONFIGS = {
         'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.2',
         'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.2',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir/TEST',
+    },
+    'NMDID_v2.4': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4',
+        'episode_start': 0,
+        'num_episodes': 0.1,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/TRAINING',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/VALIDATION',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/TEST',
     },
 }
 
