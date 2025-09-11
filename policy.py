@@ -14,7 +14,7 @@ class ACTPolicy(nn.Module):
         self.model = model # CVAE decoder
         self.optimizer = optimizer
         self.kl_weight = args_override['kl_weight']
-        print(f'KL Weight {self.kl_weight}')
+        # print(f'KL Weight {self.kl_weight}')
 
     def __call__(self, qpos, image, actions=None, is_pad=None):
         env_state = None
@@ -28,7 +28,17 @@ class ACTPolicy(nn.Module):
         # normalize = transforms.Normalize(mean=[0.5],
         #                                 std=[0.5])
         # normalize = transforms.Normalize(mean=[0.5, 0.0, 0.5], std=[0.5, 1.0, 0.5])
+        # Apply generalized min-max normalization for each sample in the batch
+
+        # print(image.shape, torch.min(image), torch.max(image))
+        eps = 1e-8  # small constant to avoid division by zero
+        image_min = image.amin(dim=(1, 2, 3), keepdim=True)
+        image_max = image.amax(dim=(1, 2, 3), keepdim=True)
+        image = (image - image_min) / (image_max - image_min + eps)
+        # print(image.shape, torch.min(image), torch.max(image))
+
         image = normalize(image)
+        # print(image.shape, torch.min(image), torch.max(image))
         # custom normalization for channels of xray, mask, heatmap
         # rgb = normalize(rgb)
         # image = torch.cat([rgb, heatmap], dim=2)
@@ -36,6 +46,7 @@ class ACTPolicy(nn.Module):
         # image = normalize(image)
         # print(image.shape, qpos.shape, actions.shape if actions is not None else None, is_pad.shape if is_pad is not None else None)
         if actions is not None: # training time
+            # print(self.model.num_queries, actions.shape, is_pad.shape, is_pad)
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
 

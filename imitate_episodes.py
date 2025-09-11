@@ -131,7 +131,7 @@ def main(args):
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_900_seed_0.ckpt']
+        ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -338,7 +338,10 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     rotation = int(rotation + 30)
 
     # Create annotation object
+    # TODO depending on which dataset we are working with we have to apply this fix..
     annotation = LineAnnotation(
+        # startpoint=ct.world_from_anatomical.inv @ geo.point(episode.start_point[:3]),
+        # endpoint=ct.world_from_anatomical.inv @ geo.point(episode.end_point[:3]),
         startpoint=geo.point(episode.start_point[:3]),
         endpoint=geo.point(episode.end_point[:3]),
         volume=ct,
@@ -350,25 +353,14 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     env.randomize_background(annotation.startpoint_in_world)
 
     # Generate camera views
-    if episode.ap_direction is None:
-        ap_view, lateral_view = env.generate_views(
-            annotation,
-            env.anterior_in_world,
-            ap_translations=episode.ap_translations,
-            lateral_translations=episode.lateral_translations,
-            randomize=False
-        )
-    else:
-        ap_view, lateral_view = env.generate_views(
-            annotation,
-            ap_direction=geo.Vector3D(episode.ap_direction),
-            ap_translations=episode.ap_translations,
-            lateral_translations=episode.lateral_translations,
-            randomize=False,
-            # lateral_direction=geo.Vector3D(episode.lateral_direction) if episode.lateral_direction is not None else None
-        )
-        ap_view["point"] += geo.vector(list(episode.ct_offset))
-        lateral_view["point"] += geo.vector(list(episode.ct_offset))
+    ap_view, lateral_view = env.generate_views(
+        annotation,
+        ap_direction=geo.Vector3D(episode.ap_direction) if episode.ap_direction is not None else env.anterior_in_world,
+        lateral_direction=geo.Vector3D(episode.lateral_direction) if episode.lateral_direction is not None else env.right_in_world,
+        randomize=False
+    )
+    ap_view["point"] += geo.vector(list(episode.ct_offset)) if episode.ct_offset is not None else geo.vector([0,0,0])
+    lateral_view["point"] += geo.vector(list(episode.ct_offset)) if episode.ct_offset is not None else geo.vector([0,0,0])
 
     # env.device.source_to_detector_distance = episode.source_to_detector_distance
 
@@ -392,7 +384,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
-    max_timesteps = int(max_timesteps * 4) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps * 10) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -447,10 +439,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
         query_frequency = policy_config['num_queries']
-        # query_frequency = 20
+        # query_frequency = 10
         # query_frequency = 1
         if temporal_agg:
             # query_frequency = 5
+            # query_frequency = 10
             query_frequency = 1
             num_queries = policy_config['num_queries']
     
@@ -543,6 +536,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     env.tools.get(tag).enabled = False
                     env.projector.device.set_view(**view)
                     image = env.projector()
+                    print(np.shape(image), np.min(image), np.max(image))
                     image = (image - image.min()) / (image.max() - image.min() + 1e-8)
                     xrays[view_name] = image
                     env.tools.get(tag).enabled = True
@@ -664,13 +658,13 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                             lateral_projection = env.device.get_camera_projection()
                             
-                            image_dict['ap'] = build_replay_augmentation_val(ap_images[-1], replay=replay, lambda_transforms=lambda_augs)[0]
-                            image_dict['lateral'] = build_replay_augmentation_val(lateral_images[-1], replay=replay, lambda_transforms=lambda_augs)[0]
+                            image_dict['ap'] = build_replay_augmentation_val(ap_images[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
+                            image_dict['lateral'] = build_replay_augmentation_val(lateral_images[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
                             # image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
                             # image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
 
-                            image_dict['ap_cropped'] = build_replay_augmentation_val(ap_cropped[-1], replay=replay, lambda_transforms=lambda_augs)[0]
-                            image_dict['lateral_cropped'] = build_replay_augmentation_val(lateral_cropped[-1], replay=replay, lambda_transforms=lambda_augs)[0]
+                            image_dict['ap_cropped'] = build_replay_augmentation_val(ap_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
+                            image_dict['lateral_cropped'] = build_replay_augmentation_val(lateral_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
                             # crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
                             # image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
                             # crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
@@ -760,8 +754,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 annotation_path=episode_original.annotation_path,
                 line_annotation=annotation,
                 episode_number=episode_original.episode,
-                ap_direction=env.anterior_in_world if episode_original.ap_direction is None else episode_original.ap_direction,
-                lateral_direction=env.right_in_world if episode_original.lateral_direction is None else episode_original.lateral_direction,
+                ap_direction=ap_view['direction'],
+                lateral_direction=lateral_view['direction'],
                 source_to_detector_distance=env.device.source_to_detector_distance,
                 ap_translations=episode_original.ap_translations,
                 lateral_translations=episode_original.lateral_translations,
@@ -841,6 +835,8 @@ def train_bc(train_dataloader, val_dataloader, config):
     use_wandb = config.get('use_wandb', False)
     resume_from_checkpoint = config.get('resume_from_checkpoint', None)
 
+    # val_dataloader.dataset.chunk_size = policy_config['num_queries']
+
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
@@ -891,8 +887,8 @@ def train_bc(train_dataloader, val_dataloader, config):
                 # Full checkpoint with training state
                 policy.load_state_dict(checkpoint['model_state_dict'])
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                start_epoch = checkpoint.get('epoch', 0) + 1
-                train_history = checkpoint.get('train_history', [])
+                # start_epoch = checkpoint.get('epoch', 0) + 1
+                # train_history = checkpoint.get('train_history', [])
                 # print(train_history)
                 validation_history = checkpoint.get('validation_history', [])
                 min_val_loss = checkpoint.get('min_val_loss', np.inf)
@@ -926,11 +922,17 @@ def train_bc(train_dataloader, val_dataloader, config):
         with torch.inference_mode():
             policy.eval()
             epoch_dicts = []
-            for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
-                val_dataloader.dataset.start_ts = start_ts
-                for batch_idx, data in enumerate(val_dataloader):
-                    forward_dict = forward_pass(data, policy)
-                    epoch_dicts.append(forward_dict)
+            # for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
+            #     val_dataloader.dataset.start_ts = start_ts
+            for batch_idx, data in enumerate(val_dataloader):
+                # image_list, qpos_list, actions_list, is_pad_list = data
+                # # timestep_dicts = []
+                # for qpos, image, actions, is_pad in zip(qpos_list, image_list, actions_list, is_pad_list):
+                #     # print(f"validation: qpos.shape: {qpos.shape}, image.shape: {image.shape}, actions.shape: {actions.shape}, is_pad.shape: {is_pad.shape}")
+                #     epoch_dicts.append(forward_pass((image, qpos, actions, is_pad), policy))
+                # forward_dict = compute_dict_mean(timestep_dicts)
+                forward_dict = forward_pass(data, policy)
+                epoch_dicts.append(forward_dict)
             epoch_summary = compute_dict_mean(epoch_dicts)
             validation_history.append(epoch_summary)
  

@@ -74,9 +74,13 @@ class ACTLightningModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         """Perform a training step and return loss."""
-        qpos, image, actions, is_pad = batch  # unpack batch (assuming this structure)
+
+        image, qpos, actions, is_pad = batch
+        loss_dict = self.policy(qpos, image, actions, is_pad)
+        # image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+        # print(f"training: qpos.shape: {qpos.shape}, image.shape: {image.shape}, actions.shape: {actions.shape}, is_pad.shape: {is_pad.shape}")
+        # return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
         # Compute losses using ACTPolicy (returns dict with 'loss', 'l1', 'kl')
-        loss_dict = self.policy(qpos, image, actions=actions, is_pad=is_pad)
         loss = loss_dict['loss']
         # Log training metrics
         self.log('train_loss', loss_dict['loss'], prog_bar=True)
@@ -86,13 +90,19 @@ class ACTLightningModule(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         """Compute validation loss for a batch."""
-        qpos_list, image_list, actions_list, is_pad_list = batch
-        
+        # image, qpos, actions, is_pad = batch
+        image_list, qpos_list, actions_list, is_pad_list = batch
+
         timestep_dicts = []
         for qpos, image, actions, is_pad in zip(qpos_list, image_list, actions_list, is_pad_list):
-            timestep_dicts.append(self.policy(qpos, image, actions=actions, is_pad=is_pad))
+            # image, qpos, actions, is_pad = image.cuda(), qpos.cuda(), actions.cuda(), is_pad.cuda()
+            # print(f"validation: qpos.shape: {qpos.shape}, image.shape: {image.shape}, actions.shape: {actions.shape}, is_pad.shape: {is_pad.shape}")
+            timestep_dicts.append(self.policy(qpos, image, actions, is_pad))
 
         loss_dict = compute_dict_mean(timestep_dicts)
+        
+        # image, qpos, actions, is_pad = batch
+        # loss_dict = self.policy(qpos, image, actions, is_pad)
         # Log validation metrics (monitor 'val_loss' for early stopping/pruning)
         self.log('val_loss', loss_dict['loss'], prog_bar=True)
         self.log('val_l1', loss_dict['l1'], prog_bar=False)
@@ -107,15 +117,21 @@ class ACTLightningModule(pl.LightningModule):
 def objective(trial: optuna.Trial, task_name, results_dir) -> float:
     """Optuna objective function: returns the validation loss for a given set of hyperparams."""
     # Suggest hyperparameters from the defined search space
-    kl_weight = trial.suggest_categorical('kl_weight', [1, 5, 10, 20, 30])
+    dropout = 0.1
+    kl_weight = 10
+    chunk_size = 20
+    batch_size = 32
+    # learning_rate = 1e-5
+
+    # kl_weight = trial.suggest_categorical('kl_weight', [1, 5, 10, 20, 30])
     # batch_size = trial.suggest_categorical('batch_size', [8, 16, 32, 64, 128])
-    batch_size = trial.suggest_categorical('batch_size', [8, 16, 32, 64])
-    chunk_size = trial.suggest_categorical('chunk_size', [10, 20, 30, 40, 60])
+    # batch_size = trial.suggest_categorical('batch_size', [8, 16, 32])
+    # chunk_size = trial.suggest_categorical('chunk_size', [10, 20, 30, 40, 60])
     learning_rate = trial.suggest_float('learning_rate', 1e-6, 1e-4, log=True)
-    dropout = trial.suggest_categorical('dropout', [0.0, 0.1, 0.2, 0.3, 0.4])
+    # dropout = trial.suggest_categorical('dropout', [0, 0.1, 0.2, 0.3, 0.4])
     # train_full_episode = trial.suggest_categorical('train_full_episode', [True, False])
 
-    max_epochs = 15  # set a reasonable upper bound for epochs
+    max_epochs = 100  # set a reasonable upper bound for epochs
 
     task_config = SIM_TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
@@ -136,29 +152,54 @@ def objective(trial: optuna.Trial, task_name, results_dir) -> float:
                                                            episodes_start, camera_names, 
                                                            batch_size, batch_size, 
                                                            train_dir=train_dir, val_dir=val_dir, 
-                                                           episode_len=episode_len, chunk_size=chunk_size
+                                                        #    episode_len=episode_len, chunk_size=chunk_size
                                                            )
     
+    # print(val_loader.dataset.chunk_size)
+
     # Set chunk_size in dataset for iterating the full episode
     val_loader.dataset.chunk_size = chunk_size
 
+    # print(val_loader.dataset.chunk_size)
+
     # Callbacks: Early stopping and Optuna pruning
     early_stop = EarlyStopping(monitor="val_loss", mode="min", patience=5, verbose=False)
-    pruning_cb = PyTorchLightningPruningCallback(trial, monitor="val_loss")
     
     # Logger (optional): log each trial to a separate TensorBoard log directory
-    tb_logger = pl.loggers.TensorBoardLogger("optuna_logs", name=f"trial_{trial.number}")
+    tb_logger = pl.loggers.TensorBoardLogger(os.path.join(results_dir, "optuna_logs"), name=f"trial_{trial.number}")
     
-    # Set up the Trainer
+    # Set up the Trainer without the problematic pruning callback initially
+    # trainer = pl.Trainer(
+    #     max_epochs=max_epochs,  # set a reasonable upper bound for epochs
+    #     accelerator="gpu", devices=2,  # use 1 GPU per trial (set >1 for multi-GPU training)
+    #     strategy="ddp" if torch.cuda.device_count() > 1 else None,
+    #     callbacks=[early_stop],
+    #     logger=tb_logger,
+    #     enable_progress_bar=False,   # disable verbose progress to keep output clean
+    #     enable_model_summary=False   # disable model summary printout for speed
+    # )
+
+    # Print trial information for progress tracking
+    # print(f"\n=== Trial {trial.number} ===")
+    # print(f"Parameters: kl_weight={kl_weight}, batch_size={batch_size}, chunk_size={chunk_size}")
+    # print(f"            lr={learning_rate:.2e}, dropout={dropout}")
+    
+    # Note: Using single GPU for hyperparameter optimization to avoid DDP issues with different architectures
     trainer = pl.Trainer(
         max_epochs=max_epochs,  # set a reasonable upper bound for epochs
-        accelerator="gpu", devices=2,  # use 1 GPU per trial (set >1 for multi-GPU training)
-        strategy="ddp" if torch.cuda.device_count() > 1 else None,
-        callbacks=[early_stop, pruning_cb],
+        accelerator="gpu", devices=1,  # use 1 GPU per trial to avoid DDP architecture mismatch
+        callbacks=[early_stop],
         logger=tb_logger,
-        enable_progress_bar=False,   # disable verbose progress to keep output clean
-        enable_model_summary=False   # disable model summary printout for speed
+        enable_progress_bar=False,    # enable progress bar to see training progress
+        enable_model_summary=False   # enable model summary printout for speed
     )
+    
+    # Add the pruning callback after trainer initialization to avoid the parent issue
+    try:
+        pruning_cb = PyTorchLightningPruningCallback(trial, monitor="val_loss")
+        trainer.callbacks.append(pruning_cb)
+    except Exception as e:
+        print(f"Warning: Could not add pruning callback: {e}. Continuing without pruning.")
     
     # Train the model (Lightning will automatically validate at epoch end)
     trainer.fit(model, train_loader, val_loader)
@@ -175,20 +216,20 @@ study = optuna.create_study(direction="minimize", pruner=pruner)
 results_dir = "/data_vertebroplasty/flora/vertebroplasty_training/optuna_results"
 os.makedirs(results_dir, exist_ok=True)
 db_path = os.path.join(results_dir, "act_hpo.db")
-TASK_NAME = "NMDID_v2.4"
-N_TRIALS = 4  # number of trials to run (can increase for a more exhaustive search)
+TASK_NAME = "NMDID_v2.4_T11"
+N_TRIALS = 300  # number of trials to run (can increase for a more exhaustive search)
 
 # --- before optimize ---
 storage_uri = f"sqlite:///{db_path}"
 study = optuna.create_study(
-    study_name="act_hpo",
+    study_name="act_hpo_t11",
     direction="minimize",
     pruner=pruner,
     storage=storage_uri,
     load_if_exists=True,
 )
 
-study.optimize(lambda t: objective(t, TASK_NAME, results_dir), n_trials=N_TRIALS)
+study.optimize(lambda t: objective(t, TASK_NAME, results_dir), n_trials=N_TRIALS, show_progress_bar=True)
 
 # Print the best result
 best_trial = study.best_trial
@@ -197,7 +238,7 @@ print("Best Hyperparameters:", best_trial.params)
 
 # Save tables
 df = study.trials_dataframe(attrs=("number","state","value","datetime_start","datetime_complete","params"))
-df.to_csv("optuna_trials.csv", index=False)
+df.to_csv(os.path.join(results_dir, "optuna_trials.csv"), index=False)
 
 # Save visuals
 from optuna.visualization import plot_optimization_history, plot_param_importances

@@ -14,7 +14,7 @@ import pdb
 import json
 import os.path as osp
 
-def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256)) -> np.ndarray:
+def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256), apply=True) -> np.ndarray:
     '''
     Required keys:
         - img
@@ -39,45 +39,49 @@ def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256
     #         format="coco", label_fields=["category_ids"], min_visibility=0.1, min_area=10
     #     ),
     # )
-    transforms =  A.Compose(
-        [
-            # neglog(),
-            A.InvertImg(always_apply=True),
-            A.OneOf(
-                [
-                    adjustable_window(0.1, 1, quantile=True),
-                    # adjustable_window(0.1, 0.9, quantile=True),
-                    mixture_window(keep_original=True, model="kmeans"),
-                ],
-                p=1.0,
-            ),
-            A.InvertImg(p=0.5),
-            clahe(p=0.3),
-            get_intensity_transforms(),
-            # A.OneOf(
-            #     [
-            #         get_intensity_transforms(p=0.9),
-            #         clahe(p=0.1),
-            #     ],
-            #     p=1,
-            # ),
-        ],
-        # **kwargs,
-    )
-    
-    # Apply the transformation and record replay data
-    transforms = transforms(image=img)
-    augmented_img = transforms["image"]
-    
-    # shuffle the channels
-    if random.random() < 0.5:
-        augmented_img = augmented_img[..., [1, 2, 0]]
+
+    if apply:
+        transforms =  A.Compose(
+            [
+                # neglog(),
+                A.InvertImg(always_apply=True),
+                A.OneOf(
+                    [
+                        adjustable_window(0.1, 1, quantile=True),
+                        # adjustable_window(0.1, 0.9, quantile=True),
+                        mixture_window(keep_original=True, model="kmeans"),
+                    ],
+                    p=1.0,
+                ),
+                A.InvertImg(p=0.5),
+                clahe(p=0.3),
+                get_intensity_transforms(),
+                # A.OneOf(
+                #     [
+                #         get_intensity_transforms(p=0.9),
+                #         clahe(p=0.1),
+                #     ],
+                #     p=1,
+                # ),
+            ],
+            # **kwargs,
+        )
+        
+        # Apply the transformation and record replay data
+        transforms = transforms(image=img)
+        augmented_img = transforms["image"]
+        
+        # shuffle the channels
+        if random.random() < 0.5:
+            augmented_img = augmented_img[..., [1, 2, 0]]
+    else:
+        augmented_img = img
 
     # results["img"] = augmented_img
 
     return augmented_img
 
-def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256, 256)) -> np.ndarray:
+def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256, 256), apply=True) -> np.ndarray:
     '''
     Required keys:
         - img
@@ -97,29 +101,32 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
     if len(img.shape) == 2 or img.shape[2] == 1:
         img = np.array([img, img, img]).transpose(1, 2, 0) if len(img.shape) == 2 else np.repeat(img, 3, axis=2)
 
-    transforms =  A.Compose(
-        [
-            # neglog(),
-            A.InvertImg(always_apply=True),
-            mixture_window(keep_original=True, model="kmeans"),
-            A.InvertImg(p=0.5),
-            clahe(p=0.3),
-        ],
-        # **kwargs,
-    )
+    if apply:
+        transforms =  A.Compose(
+            [
+                # neglog(),
+                A.InvertImg(always_apply=True),
+                mixture_window(keep_original=True, model="kmeans"),
+                A.InvertImg(p=0.5),
+                clahe(p=0.3),
+            ],
+            # **kwargs,
+        )
+            
+        # Apply the transformation and record replay data
+        transforms = transforms(image=img)
+        augmented_img = transforms["image"]
         
-    # Apply the transformation and record replay data
-    transforms = transforms(image=img)
-    augmented_img = transforms["image"]
-    
-    # shuffle the channels
-    if random.random() < 0.5:
-        augmented_img = augmented_img[..., [1, 2, 0]]
+        # shuffle the channels
+        if random.random() < 0.5:
+            augmented_img = augmented_img[..., [1, 2, 0]]
+    else:
+        augmented_img = img
 
     # results["img"] = augmented_img
     return augmented_img
 
-def build_replay_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256, 256), replay = None, lambda_transforms = None):
+def build_replay_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256, 256), replay = None, lambda_transforms = None, apply=True):
     '''
     Required keys:
         - img
@@ -148,26 +155,31 @@ def build_replay_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] 
     if len(img.shape) == 2 or img.shape[2] == 1:
         img = np.array([img, img, img]).transpose(1, 2, 0) if len(img.shape) == 2 else np.repeat(img, 3, axis=2)
 
-    # if replay is None:
-    #     data = transforms(image=img)
-    #     replay = data['replay']
-    #     lambda_transforms = {lam.name: lam for lam in transforms if isinstance(lam, A.Lambda)}
-    #     augmented_image = data["image"]
+    if apply:
+        if replay is None:
+            data = transforms(image=img)
+            replay = data['replay']
+            lambda_transforms = {lam.name: lam for lam in transforms if isinstance(lam, A.Lambda)}
+            augmented_image = data["image"]
 
-    #     # augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
-    #     # data = augs(force_apply=True, image=img)
-    #     # augmented_image = data["image"]
+            # augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
+            # data = augs(force_apply=True, image=img)
+            # augmented_image = data["image"]
 
-    #     # Create lambda_transforms dictionary to handle non-serializable transforms
-    #     # augmented_image = transforms.replay(image=img, replay=replay)
-    #     # **replay['replay']
-    # else:
-    #     augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
-    #     data = augs(force_apply=True, image=img)
-    #     augmented_image = data["image"]
+            # Create lambda_transforms dictionary to handle non-serializable transforms
+            # augmented_image = transforms.replay(image=img, replay=replay)
+            # **replay['replay']
+        else:
+            augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
+            data = augs(force_apply=True, image=img)
+            augmented_image = data["image"]
+    else:
+        augmented_image = img
 
     # results["img"] = augmented_img
-    augmented_image = img
+    # augmented_image = img
+    # print(np.shape(augmented_image), print(np.min(augmented_image), np.max(augmented_image)))
+    # print(np.shape(img), print(np.min(img), np.max(img)))
     return augmented_image, replay, lambda_transforms
 
 def build_augmentation_real_xrays(results: dict) -> dict:

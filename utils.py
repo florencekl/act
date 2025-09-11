@@ -98,6 +98,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
         if self.chunk_size is not None:
             start_ts_list = range(0, episode_len, self.chunk_size)
+            # print([start_ts for start_ts in start_ts_list])
         else:
             if self.start_ts is None:
                 start_ts_list = [np.random.choice(episode_len)]
@@ -116,7 +117,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             
             for cam_name in self.camera_names:
                 img = root[f'/observations/images/{cam_name}'][start_ts]
-                image_dict[cam_name] = self.augmentation_func(img)
+                image_dict[cam_name] = self.augmentation_func(img, apply=True)
 
             action = root['/action'][start_ts:]
             action_len = episode_len - start_ts
@@ -157,10 +158,12 @@ class EpisodicDataset(torch.utils.data.Dataset):
             ret_action_data.append(action_data)
             ret_is_pad.append(is_pad)
 
+        # print(f"utils: chunk_size: {self.chunk_size} ret_image_data[0].shape: {ret_image_data[0].shape}, ret_qpos_data[0].shape: {ret_qpos_data[0].shape}, ret_action_data[0].shape: {ret_action_data[0].shape}, ret_is_pad[0].shape: {ret_is_pad[0].shape}")
         if self.chunk_size is not None:
             return ret_image_data, ret_qpos_data, ret_action_data, ret_is_pad
         else:
-            return image_data[0], qpos_data[0], action_data[0], is_pad[0]
+            return ret_image_data[0], ret_qpos_data[0], ret_action_data[0], ret_is_pad[0]
+        # return ret_image_data[0], ret_qpos_data[0], ret_action_data[0], ret_is_pad[0]
 
 
 def get_norm_stats(dataset_dir, episode_files):
@@ -229,7 +232,7 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         # train_files = [episode_files[i] for i in train_indices]
         # val_files = [episode_files[i] for i in val_indices]
 
-        print(f'Found {len(train_files)} training files and {len(val_files)} validation files.')
+        # print(f'Found {len(train_files)} training files and {len(val_files)} validation files.')
         if len(train_files) == 0 or len(val_files) == 0:
             raise ValueError(f"No HDF5 files found in {train_dir} or {val_dir}")
         
@@ -274,6 +277,8 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         # construct dataset and dataloader
         train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
         val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
+    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
 

@@ -161,8 +161,8 @@ SIM_TASK_CONFIGS = {
         'num_episodes': 1.0,
         'episode_len': 200,
         'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
-        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir',
-        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir',
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir/TRAINING',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir/VALIDATION',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.1_rand_dir/TEST',
     },
     't10_left': {
@@ -188,12 +188,33 @@ SIM_TASK_CONFIGS = {
     'NMDID_v2.4': {
         'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4',
         'episode_start': 0,
-        'num_episodes': 0.1,
+        'num_episodes': 1.0,
         'episode_len': 200,
         'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
         'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/TRAINING',
         'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/VALIDATION',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/TEST',
+    },
+    'NMDID_v2.4_T11': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/TRAINING/T11',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/VALIDATION/T11',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.4/TEST/T11',
+    },
+    
+    'NMDID_v2.5': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_quick',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_quick/TRAINING',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_quick/VALIDATION',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_quick/TEST',
     },
 }
 
