@@ -131,7 +131,7 @@ def main(args):
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -480,24 +480,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 # get observation at start_ts only
                 image_dict = dict()
                 # heatmap_dict = dict()
-                if 'ap_cropped' in episode_original.images:
-                    for cam_name in config['camera_names']:
-                        # new approach TODO with cropped mask and 3 channel images
-                        img = episode_original.images[cam_name][starting_timestep]
-                        # if img.shape[:2] != target_size:
-                        #     pil_img = Image.fromarray(img)
-                        #     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
-                        # image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
-                        image_dict[cam_name], replay, lambda_augs = build_replay_augmentation_val(img, replay=replay, lambda_transforms=lambda_augs)
-                else:
-                    for cam_name in config['camera_names']:
-                        mask = episode_original.masks[cam_name][starting_timestep].astype(np.float32)
-                        mask = mask / 255.0  # Normalize masks to [0, 1]
-                        image_dict[cam_name] = np.array([
-                            episode_original.images[cam_name][starting_timestep],
-                            mask,
-                            episode_original.heatmaps[cam_name]
-                        ]).transpose(1, 2, 0)
+                for cam_name in config['camera_names']:
+                    image_dict[cam_name], replay, lambda_augs = build_replay_augmentation_val(episode_original.images[cam_name][starting_timestep], replay=replay, lambda_transforms=lambda_augs)
 
                 # TODO get new starting qpos from the sim environment directly
                 qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
