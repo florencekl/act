@@ -130,8 +130,8 @@ def main(args):
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_250_seed_0.ckpt']
+        ckpt_names = [f'policy_last.ckpt']
+        ckpt_names = [f'policy_epoch_300_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -376,6 +376,23 @@ def generate_random_vector(env: SimulationEnvironment) -> np.ndarray:
         if norm > 1e-6:
             return perp_vec / norm
 
+def get_cropped(image, center_x, center_y):
+    # Create cropped image (1/8th the size) centered on the highest value of the heatmap
+    h, w = image.shape[:2]
+    crop_w, crop_h = w // 2, h // 2
+    
+    # Compute crop corners ensuring they are within the image bounds
+    start_x = max(center_x - crop_w // 2, 0)
+    start_y = max(center_y - crop_h // 2, 0)
+    end_x = min(start_x + crop_w, w)
+    end_y = min(start_y + crop_h, h)
+    
+    cropped = image[start_y:end_y, start_x:end_x]
+
+    pil_img = Image.fromarray(cropped)
+    img = np.array(pil_img.resize((256, 256), Image.BILINEAR))
+
+    return img
 
 def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     set_seed(1000)
@@ -384,7 +401,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
-    max_timesteps = int(max_timesteps * 10) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -481,7 +498,21 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 image_dict = dict()
                 # heatmap_dict = dict()
                 for cam_name in config['camera_names']:
-                    image_dict[cam_name], replay, lambda_augs = build_replay_augmentation_val(episode_original.images[cam_name][starting_timestep], replay=replay, lambda_transforms=lambda_augs)
+                    if "ap" == cam_name:
+                        img = episode_original.images[cam_name][starting_timestep]
+                        crop_center = tuple(episode_original.crop_center_ap)
+                        cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                        image_dict[f"{cam_name}_cropped"] = cropped_img
+                        image_dict[cam_name] = img
+                    elif "lateral" == cam_name:
+                        img = episode_original.images[cam_name][starting_timestep]
+                        crop_center = tuple(episode_original.crop_center_lateral)
+                        cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                        image_dict[f"{cam_name}_cropped"] = cropped_img
+                        image_dict[cam_name] = img
+                    # image_dict[cam_name] = self.augmentation_func(img, apply=True)
+                for cam_name in config['camera_names']:
+                    image_dict[cam_name], replay, lambda_augs = build_replay_augmentation_val(image_dict[cam_name], replay=replay, lambda_transforms=lambda_augs)
 
                 # TODO get new starting qpos from the sim environment directly
                 qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
@@ -557,9 +588,9 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                         cannula_point = base_point + (direction * distance)
                         linear_point = base_point + (direction * distance)
-                        start_position[7] = np.round(action[7])
-                        start_position[8] = np.round(action[8])
-                        start_position[9] = np.round(action[9])
+                        # start_position[7] = np.round(action[7])
+                        # start_position[8] = np.round(action[8])
+                        # start_position[9] = np.round(action[9])
 
                         cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
                         linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
@@ -724,6 +755,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         pbar.set_postfix({"distance": cur_distance})
 
             # Convert to numpy arrays
+            # ap_images = np.array(ap_images[::5])
+            # lateral_images = np.array(lateral_images[::5])
             ap_images = np.array(ap_images)
             lateral_images = np.array(lateral_images)
 

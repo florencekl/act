@@ -227,6 +227,17 @@ SIM_TASK_CONFIGS = {
         'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_offset_rotation/VALIDATION',
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_offset_rotation/TEST',
     },
+
+    'NMDID_v3.1': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 100,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed/TEST',
+    },
 }
 
 ### Simulation envs fixed constants

@@ -24,6 +24,24 @@ def discover_episode_files(dataset_dir, num_episodes=None, episodes_start=None):
         episode_files = episode_files[:int(num_episodes * len(episode_files))]  # Limit to num_episodes if specified
     return sorted(episode_files)  # Sort for reproducible order
 
+def get_cropped(image, center_x, center_y):
+    # Create cropped image (1/8th the size) centered on the highest value of the heatmap
+    h, w = image.shape[:2]
+    crop_w, crop_h = w // 2, h // 2
+    
+    # Compute crop corners ensuring they are within the image bounds
+    start_x = max(center_x - crop_w // 2, 0)
+    start_y = max(center_y - crop_h // 2, 0)
+    end_x = min(start_x + crop_w, w)
+    end_y = min(start_y + crop_h, h)
+    
+    cropped = image[start_y:end_y, start_x:end_x]
+
+    pil_img = Image.fromarray(cropped)
+    img = np.array(pil_img.resize((256, 256), Image.BILINEAR))
+
+    return img
+
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_files, dataset_dir, camera_names, norm_stats, augmentation_func):
         super(EpisodicDataset).__init__()
@@ -116,8 +134,19 @@ class EpisodicDataset(torch.utils.data.Dataset):
             image_dict = dict()
             
             for cam_name in self.camera_names:
-                img = root[f'/observations/images/{cam_name}'][start_ts]
-                image_dict[cam_name] = self.augmentation_func(img, apply=True)
+                if "ap" == cam_name:
+                    img = root[f'/observations/images/{cam_name}'][start_ts]
+                    crop_center = tuple(root[f'/annotations/crop_center_ap'][:])
+                    cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                    image_dict[f"{cam_name}_cropped"] = cropped_img
+                    image_dict[cam_name] = img
+                elif "lateral" == cam_name:
+                    img = root[f'/observations/images/{cam_name}'][start_ts]
+                    crop_center = tuple(root[f'/annotations/crop_center_lateral'][:])
+                    cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                    image_dict[f"{cam_name}_cropped"] = cropped_img
+                    image_dict[cam_name] = img
+                # image_dict[cam_name] = self.augmentation_func(img, apply=True)
 
             action = root['/action'][start_ts:]
             action_len = episode_len - start_ts
