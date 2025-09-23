@@ -5,9 +5,9 @@ from .dropout import *
 def clahe(p: float = 0.5):
     clahe = A.Sequential(
         [
-            A.FromFloat(max_value=255, dtype="uint8", always_apply=True),
+            # A.FromFloat(max_value=255, dtype="uint8", always_apply=True),
             A.CLAHE(clip_limit=(4, 6), tile_grid_size=(8, 12), always_apply=True),
-            A.ToFloat(max_value=255, always_apply=True),
+            # A.ToFloat(max_value=255, always_apply=True),
         ],
         p=p,
     )
@@ -96,7 +96,7 @@ def get_intensity_transforms(p: float = 1.0):
                     ),
                 ],
             ),
-            A.ChannelShuffle(),
+            # A.ChannelShuffle(),
             # A.ChromaticAberration(),
         ],
         n=np.random.randint(1, 5),

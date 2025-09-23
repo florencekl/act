@@ -21,14 +21,14 @@ import platform
 
 from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
 from deepdrr_simulation_platform import EpisodeData, calculate_distances, load_config, SimulationEnvironment
-from deepdrr_simulation_platform.sim_environment import centroid_heatmap
+from deepdrr_simulation_platform.sim_environment import centroid_heatmap, centroid_with_bbox
 from deepdrr_simulation_platform._data_validation import validate_trajectory_from_points, load_and_transform_mesh, validate_trajectory
 from utils import load_data # data functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from deepdrr.vol import Mesh
 from PIL import Image
-from xray_transforms.xray_transforms import build_augmentation, build_augmentation_val, build_replay_augmentation_val
+from xray_transforms.xray_transforms import build_augmentation, build_augmentation_val, build_replay_augmentation_val, build_augmentation_real_xrays
 
 import IPython
 e = IPython.embed
@@ -130,8 +130,8 @@ def main(args):
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
-        ckpt_names = [f'policy_last.ckpt']
-        ckpt_names = [f'policy_epoch_300_seed_0.ckpt']
+        # ckpt_names = [f'policy_last.ckpt']
+        # ckpt_names = [f'policy_epoch_500_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -366,6 +366,51 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
 
     return env, ct, tag, annotation, ap_view, lateral_view, rotation
 
+def crop_around_centroid(image: np.ndarray, centroid: tuple[int, int], bbox_size: tuple[int, int], 
+                        crop_size: tuple[int, int] = None, padding_factor: float = 1.5) -> np.ndarray:
+    """
+    Crop image around centroid with perfect bounding box or custom size.
+    
+    Args:
+        image: Input image (H, W) or (H, W, C)
+        centroid: (y, x) position of the centroid
+        bbox_size: (height, width) of the object's bounding box
+        crop_size: Optional (height, width) for fixed crop size. If None, uses bbox_size * padding_factor
+        padding_factor: Multiplier for bbox_size when crop_size is None
+    
+    Returns:
+        Cropped image
+    """
+    h, w = image.shape[:2]
+    center_y, center_x = centroid
+    
+    if crop_size is None:
+        # Use bounding box size with padding
+        crop_h = int(bbox_size[0] * padding_factor)
+        crop_w = int(bbox_size[1] * padding_factor)
+    else:
+        crop_h, crop_w = crop_size
+
+    # always make it square
+    if crop_h > crop_w:
+        crop_w = crop_h
+    else:
+        crop_h = crop_w
+    
+    # Calculate crop boundaries
+    start_y = max(0, center_y - crop_h // 2)
+    end_y = min(h, start_y + crop_h)
+    start_x = max(0, center_x - crop_w // 2)
+    end_x = min(w, start_x + crop_w)
+    
+    # Adjust start if end hits boundary
+    if end_y == h:
+        start_y = max(0, h - crop_h)
+    if end_x == w:
+        start_x = max(0, w - crop_w)
+    
+    return image[start_y:end_y, start_x:end_x]
+
 
 def generate_random_vector(env: SimulationEnvironment) -> np.ndarray:
     while True:
@@ -479,6 +524,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             ap_masks = []
             ap_heatmap= None
             qpos_history = []
+            qvel_history = []
 
             # query_frequency = num_rollouts - rollout_id
 
@@ -497,48 +543,60 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 # get observation at start_ts only
                 image_dict = dict()
                 # heatmap_dict = dict()
+                # for cam_name in config['camera_names']:
+                #     if "ap" == cam_name:
+                #         img = episode_original.images[cam_name][starting_timestep]
+                #         crop_center = tuple(episode_original.crop_center_ap)
+                #         cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                #         image_dict[f"{cam_name}_cropped"] = cropped_img
+                #         image_dict[cam_name] = img
+                #     elif "lateral" == cam_name:
+                #         img = episode_original.images[cam_name][starting_timestep]
+                #         crop_center = tuple(episode_original.crop_center_lateral)
+                #         cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                #         image_dict[f"{cam_name}_cropped"] = cropped_img
+                #         image_dict[cam_name] = img
+                    # image_dict[cam_name] = build_augmentation_real_xrays(img, apply=True)
                 for cam_name in config['camera_names']:
-                    if "ap" == cam_name:
-                        img = episode_original.images[cam_name][starting_timestep]
-                        crop_center = tuple(episode_original.crop_center_ap)
-                        cropped_img = get_cropped(img, crop_center[0], crop_center[1])
-                        image_dict[f"{cam_name}_cropped"] = cropped_img
-                        image_dict[cam_name] = img
-                    elif "lateral" == cam_name:
-                        img = episode_original.images[cam_name][starting_timestep]
-                        crop_center = tuple(episode_original.crop_center_lateral)
-                        cropped_img = get_cropped(img, crop_center[0], crop_center[1])
-                        image_dict[f"{cam_name}_cropped"] = cropped_img
-                        image_dict[cam_name] = img
-                    # image_dict[cam_name] = self.augmentation_func(img, apply=True)
-                for cam_name in config['camera_names']:
-                    image_dict[cam_name], replay, lambda_augs = build_replay_augmentation_val(image_dict[cam_name], replay=replay, lambda_transforms=lambda_augs)
+                    if "crop" in cam_name:
+                        image = np.array(Image.fromarray(episode_original.images[cam_name][starting_timestep]).resize(target_size, Image.BILINEAR))
+                    else:
+                        image = episode_original.images[cam_name][starting_timestep]
+                    image_dict[cam_name] = np.array([image, image, image]).transpose(1, 2, 0)
+                    # episode_original.images[cam_name][starting_timestep]
+                    # image_dict[cam_name] = build_augmentation_real_xrays(image_dict[cam_name])
+                    # print(np.shape(episode_original.images[cam_name]))
+                    # image_dict[cam_name] = build_augmentation_real_xrays(episode_original.images[cam_name][starting_timestep])
+
 
                 # TODO get new starting qpos from the sim environment directly
-                qpos = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
-                target_qpos = qpos.copy()
+                start_position = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
 
-                # TODO randomize starting positions
-                start_position = qpos
-
-                if rollout_id > 0:
+                if rollout_id != 0:
 
                     offset_direction = generate_random_vector(env)
 
                     offset_point = kg.point(
-                        qpos[0] + np.random.uniform(env.cfg.simulation.cannula_offset[0], env.cfg.simulation.cannula_offset[1]) * offset_direction[0],
-                        qpos[1] + np.random.uniform(env.cfg.simulation.cannula_offset[0], env.cfg.simulation.cannula_offset[1]) * offset_direction[1],
-                        qpos[2] + np.random.uniform(env.cfg.simulation.cannula_offset[0], env.cfg.simulation.cannula_offset[1]) * offset_direction[2],
+                        start_position[0] + np.random.uniform(env.cfg.simulation.cannula_offset[0] * 8, env.cfg.simulation.cannula_offset[1] * 4) * offset_direction[0],
+                        start_position[1] + np.random.uniform(env.cfg.simulation.cannula_offset[0] * 8, env.cfg.simulation.cannula_offset[1] * 4) * offset_direction[1],
+                        start_position[2] + np.random.uniform(env.cfg.simulation.cannula_offset[0] * 8, env.cfg.simulation.cannula_offset[1] * 4) * offset_direction[2],
                     )
+
+                    print(f"Offsetting starting position by {offset_point - kg.point(*start_position[:3])} mm")
 
                     start_position[:3] = offset_point.tolist()[:3]
 
                 # ! qvel delta positioning
                 qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()
+                qvel_history.append(qvel)
+                # if state_dim == 11:
+                #     pedicle_side_flag = qvel[10]
+                # print(qvel)
                 action = np.zeros_like(qvel)
 
                 xrays = {}
                 crop_center = {}
+                crop_bbox = {}
 
                 env.ct.set_enabled(True)
                 views = {
@@ -556,41 +614,30 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     xrays[view_name] = image
                     env.tools.get(tag).enabled = True
                     mask = centroid_heatmap(env.projector.project_seg(tags=[tag])[0])
+                    
+                    centroid, bbox_size = centroid_with_bbox(env.projector.project_seg(tags=[tag])[0])
                     max_idx =  np.unravel_index(np.argmax(mask), mask.shape)
-                    crop_center[view_name] = max_idx
+                    centroid = max_idx
+                    if 'ap' in view_name and episode_original.crop_center_ap is not None:
+                        centroid = tuple(episode_original.crop_center_ap)
+                    elif 'lateral' in view_name and episode_original.crop_center_lateral is not None:
+                        centroid = tuple(episode_original.crop_center_lateral)
+                    crop_center[view_name] = centroid
+                    crop_bbox[view_name] = bbox_size
                 env.ct.set_enabled(False)
+                env.ct.set_enabled(True)
                 
                 goal_position = annotation.startpoint_in_world.lerp(annotation.endpoint_in_world, env.cfg.simulation.end_progress)
 
                 with tqdm(range(max_timesteps), desc="Timesteps") as pbar:
                     for t in pbar:
-                        # # Dynamically compute the query frequency based on the current timestep "t"
-                        # if t < 0.5 * max_timesteps:
-                        #     query_frequency = 10
-                        # elif t < 0.8 * max_timesteps:
-                        #     query_frequency = 5
 
-                        #     # # Linearly interpolate from 10 to 5 between 50% and 90% of max timesteps
-                        #     # fraction = (t - 0.5 * max_timesteps) / (0.4 * max_timesteps)
-                        #     # query_frequency = int(round(10 - 5 * fraction))
-                        # else:
-                        #     query_frequency = 1
-                        #     # # Linearly interpolate from 5 to 1 between 90% and 100% of max timesteps
-                        #     # fraction = (t - 0.9 * max_timesteps) / (0.1 * max_timesteps)
-                        #     # query_frequency = max(1, int(round(5 - 4 * fraction)))
-
-                        base_point = target_qpos[:3]
-                        direction = geo.vector(target_qpos[3:6])
-                        distance = target_qpos[6]
-
-                        # limit distance artifically
-                        # distance = np.min([distance, 125])
+                        base_point = start_position[:3]
+                        direction = geo.vector(start_position[3:6])
+                        distance = start_position[6]
 
                         cannula_point = base_point + (direction * distance)
                         linear_point = base_point + (direction * distance)
-                        # start_position[7] = np.round(action[7])
-                        # start_position[8] = np.round(action[8])
-                        # start_position[9] = np.round(action[9])
 
                         cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
                         linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
@@ -609,14 +656,16 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                                 rotation=rotation,
                                 generate_masks=False,
                             )
-                            ap_image = (ap_image - ap_image.min()) / (ap_image.max() - ap_image.min() + 1e-8)
-                            ap_image = 0.5 * xrays["ap_view"] + 0.5 * ap_image
-                            ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
+                            # ap_image = (ap_image - ap_image.min()) / (ap_image.max() - ap_image.min() + 1e-8)
+                            # ap_image = 0.5 * xrays["ap_view"] + 0.5 * ap_image
+                            # ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
 
+                            # ap_images.append(build_augmentation_real_xrays(ap_image))
                             ap_images.append(ap_image)
                             # ap_masks.append(masks["cannula"][0])
                             # ap_heatmap = (centroid_heatmap(masks[tag][0]))
 
+                            # ap_cropped.append(crop_around_centroid(ap_image, crop_center['ap_view'], crop_bbox['ap_view'], padding_factor=0.7))
                             # Create cropped image (1/8th the size) centered on the highest value of the heatmap
                             h, w = ap_image.shape[:2]
                             crop_w, crop_h = w // 2, h // 2
@@ -631,6 +680,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             end_x = min(start_x + crop_w, w)
                             end_y = min(start_y + crop_h, h)
 
+                            # # ap_cropped.append(build_augmentation_real_xrays(ap_image[start_y:end_y, start_x:end_x]))
                             ap_cropped.append(ap_image[start_y:end_y, start_x:end_x])
 
                             # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
@@ -647,13 +697,17 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                                 rotation=rotation,
                                 generate_masks=False,
                             )
-                            lateral_image = (lateral_image - lateral_image.min()) / (lateral_image.max() - lateral_image.min() + 1e-8)
-                            lateral_image = 0.5 * xrays["lateral_view"] + 0.5 * lateral_image
-                            lateral_image = env.histogram_matching(lateral_image, xrays["lateral_view"])
+                            # lateral_image = (lateral_image - lateral_image.min()) / (lateral_image.max() - lateral_image.min() + 1e-8)
+                            # lateral_image = 0.5 * xrays["lateral_view"] + 0.5 * lateral_image
+                            # lateral_image = env.histogram_matching(lateral_image, xrays["lateral_view"])
 
+                            # lateral_images.append(build_augmentation_real_xrays(lateral_image))
                             lateral_images.append(lateral_image)
                             # lateral_masks.append(masks["cannula"][0])
                             # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
+
+                            
+                            # lateral_cropped.append(crop_around_centroid(lateral_image, crop_center['lateral_view'], crop_bbox['lateral_view'], padding_factor=0.7))
 
                             # Create cropped image (1/8th the size) centered on the highest value of the heatmap
                             h, w = lateral_image.shape[:2]
@@ -669,23 +723,26 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             end_x = min(start_x + crop_w, w)
                             end_y = min(start_y + crop_h, h)
 
+                            # # lateral_cropped.append(build_augmentation_real_xrays(lateral_image[start_y:end_y, start_x:end_x]))
                             lateral_cropped.append(lateral_image[start_y:end_y, start_x:end_x])
 
                             lateral_projection = env.device.get_camera_projection()
                             
-                            image_dict['ap'] = build_replay_augmentation_val(ap_images[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
-                            image_dict['lateral'] = build_replay_augmentation_val(lateral_images[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
-                            # image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
-                            # image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
+                            # image_dict['ap'] = build_replay_augmentation_val(ap_images[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
+                            # image_dict['lateral'] = build_replay_augmentation_val(lateral_images[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
+                            # image_dict['ap'] = build_augmentation_real_xrays(ap_images[-1])
+                            # image_dict['lateral'] = build_augmentation_real_xrays(lateral_images[-1])
+                            image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
+                            image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
 
-                            image_dict['ap_cropped'] = build_replay_augmentation_val(ap_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
-                            image_dict['lateral_cropped'] = build_replay_augmentation_val(lateral_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
-                            # crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
-                            # image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
-                            # crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
-                            # image_dict['lateral_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
-
-                            qpos_history.append(qpos)
+                            # image_dict['ap_cropped'] = build_replay_augmentation_val(ap_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
+                            # image_dict['lateral_cropped'] = build_replay_augmentation_val(lateral_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
+                            # image_dict['ap_cropped'] = build_augmentation_real_xrays(ap_cropped[-1])
+                            # image_dict['lateral_cropped'] = build_augmentation_real_xrays(lateral_cropped[-1])
+                            crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
+                            image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
+                            crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
+                            image_dict['lateral_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
 
                         # new axis for different cameras
                         all_cam_images = []
@@ -699,20 +756,11 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                         # channel last
                         image_data = torch.einsum('k h w c -> k c h w', image_data)
-
-                        # normalize image and change dtype to float
-                        # image_data = image_data / 255.0
-                        
-                        # from PIL import Image
-                        # img = Image.fromarray(np.array((image_data * 255)).astype(np.uint8), mode='RGB')
-                        # img.save(f'test_image_{t}.png')
-
                         image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
                         
-                        qpos = pre_process(qpos)
-                        qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
-
-                        # ! qvel
+                        # qpos_history.append(qvel)
+                        # if state_dim == 11:
+                        #     qvel[10] = pedicle_side_flag
                         qpos = pre_process(qvel)
                         qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
 
@@ -740,17 +788,26 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         ### post-process actions
                         raw_action = raw_action.squeeze(0).cpu().numpy()
                         action = post_process(raw_action)
-                        target_qpos = action
-                        qvel = target_qpos
+                        qvel_history.append(action)
+
+                        # print(state_dim)
+                        if state_dim == 11:
+                            action[7] = np.round(action[7])
+                            action[8] = np.round(action[8])
+                            action[9] = np.round(action[9])
+                            action[10] = np.round(action[10])
+                        elif state_dim == 10:
+                            action[7] = np.round(action[7])
+                            action[8] = np.round(action[8])
+                            action[9] = np.round(action[9])
 
                         # ! qvel delta relative position
-                        start_position = start_position + target_qpos
-                        target_qpos = start_position
+                        start_position = start_position + action
+                        # start_position[7::] = np.round(action[7::])
+                        qpos_history.append(start_position)
+                        qvel = action
 
-                        qpos = target_qpos
-
-                        
-                        cur_distance = np.linalg.norm(geo.point(goal_position) - geo.point(reached_goal_position))
+                        cur_distance = np.linalg.norm(geo.point(goal_position) - geo.point(start_position[:3]))
                         
                         pbar.set_postfix({"distance": cur_distance})
 
@@ -760,8 +817,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             ap_images = np.array(ap_images)
             lateral_images = np.array(lateral_images)
 
-            qvel = np.vstack(([0] * config['action_dim'], np.diff(qpos_history, axis=0)))
-            qvel = qvel.tolist()
+            # qvel = np.vstack(([0] * config['action_dim'], np.diff(qpos_history, axis=0)))
+            # qvel = qvel.tolist()
             
             regenerated_episodes.append(EpisodeData.create_episode_data(
                 case=episode_original.case,
@@ -779,7 +836,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 projector_noise=episode_original.noise,
                 photon_count=episode_original.photon_count,
                 qpos=np.array(qpos_history, dtype=np.float32),
-                qvel=np.array(qvel, dtype=np.float32),
+                qvel=np.array(qvel_history, dtype=np.float32),
                 ap_projection=ap_projection,
                 ct_offset=geo.vector(episode_original.ct_offset),
                 lateral_projection=lateral_projection,
@@ -795,6 +852,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 lateral_heatmap=None,
                 ap_cropped=ap_cropped,
                 lateral_cropped=lateral_cropped,
+                ap_cropped_small=None,
+                lateral_cropped_small=None,
             ))
 
             # tag = env.cfg.paths.vertebra_directory \

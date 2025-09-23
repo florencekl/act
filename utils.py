@@ -42,6 +42,17 @@ def get_cropped(image, center_x, center_y):
 
     return img
 
+def resize(image, size=(256, 256)):
+    if image.shape[:2] != size:
+        pil_img = Image.fromarray(image)
+        image = np.array(pil_img.resize(size, Image.BILINEAR))
+    
+    
+    if len(image.shape) == 2 or image.shape[2] == 1:
+        image = np.array([image, image, image]).transpose(1, 2, 0) if len(image.shape) == 2 else np.repeat(image, 3, axis=2)
+
+    return image
+
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_files, dataset_dir, camera_names, norm_stats, augmentation_func):
         super(EpisodicDataset).__init__()
@@ -134,19 +145,22 @@ class EpisodicDataset(torch.utils.data.Dataset):
             image_dict = dict()
             
             for cam_name in self.camera_names:
-                if "ap" == cam_name:
-                    img = root[f'/observations/images/{cam_name}'][start_ts]
-                    crop_center = tuple(root[f'/annotations/crop_center_ap'][:])
-                    cropped_img = get_cropped(img, crop_center[0], crop_center[1])
-                    image_dict[f"{cam_name}_cropped"] = cropped_img
-                    image_dict[cam_name] = img
-                elif "lateral" == cam_name:
-                    img = root[f'/observations/images/{cam_name}'][start_ts]
-                    crop_center = tuple(root[f'/annotations/crop_center_lateral'][:])
-                    cropped_img = get_cropped(img, crop_center[0], crop_center[1])
-                    image_dict[f"{cam_name}_cropped"] = cropped_img
-                    image_dict[cam_name] = img
-                # image_dict[cam_name] = self.augmentation_func(img, apply=True)
+                # if "ap" == cam_name:
+                #     img = root[f'/observations/images/{cam_name}'][start_ts]
+                #     crop_center = tuple(root[f'/annotations/crop_center_ap'][:])
+                #     cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                #     image_dict[f"{cam_name}_cropped"] = cropped_img
+                #     image_dict[cam_name] = img
+                # elif "lateral" == cam_name:
+                #     img = root[f'/observations/images/{cam_name}'][start_ts]
+                #     crop_center = tuple(root[f'/annotations/crop_center_lateral'][:])
+                #     cropped_img = get_cropped(img, crop_center[0], crop_center[1])
+                #     image_dict[f"{cam_name}_cropped"] = cropped_img
+                #     image_dict[cam_name] = img
+                img = root[f'/observations/images/{cam_name}'][start_ts]
+                image_dict[cam_name] = resize(img)
+                # print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]), np.mean(image_dict[cam_name]), image_dict[cam_name].shape)
+                # image_dict[cam_name] = self.augmentation_func(img)
 
             action = root['/action'][start_ts:]
             action_len = episode_len - start_ts
@@ -172,6 +186,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
             # construct observations
             image_data = torch.from_numpy(all_cam_images).float()  # Explicitly convert to float32
+            # print("Image data shape:", image_data.shape)
             qpos_data = torch.from_numpy(qpos).float()
             is_pad = torch.from_numpy(is_pad).bool()
             action_data = torch.from_numpy(padded_qvel).float()
@@ -306,10 +321,10 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         # construct dataset and dataloader
         train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
         val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
-    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
-    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 

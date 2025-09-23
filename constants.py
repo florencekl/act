@@ -228,15 +228,35 @@ SIM_TASK_CONFIGS = {
         'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v2.5_offset_rotation/TEST',
     },
 
-    'NMDID_v3.1': {
-        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed',
+    'NMDID_v3.2': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.2',
         'episode_start': 0,
         'num_episodes': 1.0,
         'episode_len': 100,
         'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
-        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed/TRAIN',
-        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed/VAL',
-        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.1_preprocessed/TEST',
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.2/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.2/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v3.2/TEST',
+    },
+    'NMDID_v4.0': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.0',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.0/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.0/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.0/TEST',
+    },
+    'NMDID_v4.1': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.1_no_augment',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.1_no_augment/TRAIN',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.1_no_augment/VAL',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subclustering_v4.1_no_augment/TEST',
     },
 }
 
