@@ -37,10 +37,56 @@ def get_cropped(image, center_x, center_y):
     
     cropped = image[start_y:end_y, start_x:end_x]
 
+    # pil_img = Image.fromarray(cropped, mode="RGB")
     pil_img = Image.fromarray(cropped)
     img = np.array(pil_img.resize((256, 256), Image.BILINEAR))
 
     return img
+
+def crop_around_centroid(image: np.ndarray, centroid: tuple[int, int], bbox_size: tuple[int, int], 
+                        crop_size: tuple[int, int] = None, padding_factor: float = 1.5) -> np.ndarray:
+    """
+    Crop image around centroid with perfect bounding box or custom size.
+    
+    Args:
+        image: Input image (H, W) or (H, W, C)
+        centroid: (y, x) position of the centroid
+        bbox_size: (height, width) of the object's bounding box
+        crop_size: Optional (height, width) for fixed crop size. If None, uses bbox_size * padding_factor
+        padding_factor: Multiplier for bbox_size when crop_size is None
+    
+    Returns:
+        Cropped image
+    """
+    h, w = image.shape[:2]
+    center_y, center_x = centroid
+    
+    if crop_size is None:
+        # Use bounding box size with padding
+        crop_h = int(bbox_size[0] * padding_factor)
+        crop_w = int(bbox_size[1] * padding_factor)
+    else:
+        crop_h, crop_w = crop_size
+
+    # always make it square
+    if crop_h > crop_w:
+        crop_w = crop_h
+    else:
+        crop_h = crop_w
+    
+    # Calculate crop boundaries
+    start_y = max(0, center_y - crop_h // 2)
+    end_y = min(h, start_y + crop_h)
+    start_x = max(0, center_x - crop_w // 2)
+    end_x = min(w, start_x + crop_w)
+    
+    # Adjust start if end hits boundary
+    if end_y == h:
+        start_y = max(0, h - crop_h)
+    if end_x == w:
+        start_x = max(0, w - crop_w)
+    
+    return image[start_y:end_y, start_x:end_x]
 
 def resize(image, size=(256, 256)):
     if image.shape[:2] != size:
@@ -145,22 +191,54 @@ class EpisodicDataset(torch.utils.data.Dataset):
             image_dict = dict()
             
             for cam_name in self.camera_names:
+                if "ap" == cam_name:
+                    img = root[f'/observations/images/{cam_name}'][start_ts]
+                    crop_center = tuple(root[f'/annotations/crop_center_ap'][:])
+                    bbox = np.shape(root[f'/observations/images/{cam_name}_cropped'])[1:3]
+                    # augmented_img = self.augmentation_func(img)
+                    augmented_img = img
+                    image_dict[cam_name] = resize(augmented_img)
+                    cropped_img = crop_around_centroid(augmented_img, crop_center, bbox)
+                    image_dict[f"{cam_name}_cropped"] = resize(cropped_img)
+                elif "lateral" == cam_name:
+                    img = root[f'/observations/images/{cam_name}'][start_ts]
+                    crop_center = tuple(root[f'/annotations/crop_center_lateral'][:])
+                    bbox = np.shape(root[f'/observations/images/{cam_name}_cropped'])[1:3]
+                    # augmented_img = self.augmentation_func(img)
+                    augmented_img = img
+                    image_dict[cam_name] = resize(augmented_img)
+                    cropped_img = crop_around_centroid(augmented_img, crop_center, bbox)
+                    image_dict[f"{cam_name}_cropped"] = resize(cropped_img)
+
                 # if "ap" == cam_name:
                 #     img = root[f'/observations/images/{cam_name}'][start_ts]
                 #     crop_center = tuple(root[f'/annotations/crop_center_ap'][:])
                 #     cropped_img = get_cropped(img, crop_center[0], crop_center[1])
-                #     image_dict[f"{cam_name}_cropped"] = cropped_img
-                #     image_dict[cam_name] = img
+                #     # print(np.shape(cropped_img))
+                #     # print(np.shape(img))
+                #     image_dict[f"{cam_name}_cropped"] = np.array([cropped_img, cropped_img, cropped_img]).transpose(1, 2, 0)
+                #     image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
                 # elif "lateral" == cam_name:
                 #     img = root[f'/observations/images/{cam_name}'][start_ts]
                 #     crop_center = tuple(root[f'/annotations/crop_center_lateral'][:])
                 #     cropped_img = get_cropped(img, crop_center[0], crop_center[1])
-                #     image_dict[f"{cam_name}_cropped"] = cropped_img
-                #     image_dict[cam_name] = img
-                img = root[f'/observations/images/{cam_name}'][start_ts]
-                image_dict[cam_name] = resize(img)
+                #     # print(np.shape(cropped_img))
+                #     # print(np.shape(img))
+                #     image_dict[f"{cam_name}_cropped"] = np.array([cropped_img, cropped_img, cropped_img]).transpose(1, 2, 0)
+                #     image_dict[cam_name] = np.array([img, img, img]).transpose(1, 2, 0)
+
+                
+                # img = root[f'/observations/images/{cam_name}'][start_ts]
+                # image_dict[cam_name] = resize(img)
                 # print(np.min(image_dict[cam_name]), np.max(image_dict[cam_name]), np.mean(image_dict[cam_name]), image_dict[cam_name].shape)
                 # image_dict[cam_name] = self.augmentation_func(img)
+
+                # output_dir = os.path.join(self.dataset_dir, "saved_images")
+                # os.makedirs(output_dir, exist_ok=True)
+                # orig_img = Image.fromarray((image_dict[cam_name][:,:,0] * 255).astype(np.uint8))
+                # base_name = os.path.splitext(episode_filename)[0]
+                # orig_path = os.path.join(output_dir, f"{base_name}_frame{start_ts}_{cam_name}.png")
+                # orig_img.save(orig_path)
 
             action = root['/action'][start_ts:]
             action_len = episode_len - start_ts

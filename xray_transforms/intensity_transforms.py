@@ -66,22 +66,23 @@ def get_intensity_transforms(p: float = 1.0):
                     A.MedianBlur(blur_limit=5),
                 ],
             ),
-            A.OneOf(
-                [
-                    A.Sharpen(alpha=(0.2, 0.5)),
-                    A.Emboss(alpha=(0.2, 0.5)),
-                ],
-            ),
+            # A.OneOf(
+            #     [
+            #         A.Sharpen(alpha=(0.2, 0.5)),
+            #         A.Emboss(alpha=(0.2, 0.5)),
+            #     ],
+            # ),
             # A.PlanckianJitter(mode="blackbody"),  # Fine
-            A.RandomBrightnessContrast(brightness_limit=(-0.2, -0.2), contrast_limit=(-0.2, 0.2)),
-            gaussian_contrast(alpha=(0.4, 2.0), sigma=(0.2, 1.0), max_value=1),
-            A.OneOf(
-                [
-                    A.RandomFog(fog_coef_lower=0.1, fog_coef_upper=0.3, alpha_coef=0.08),
-                    # A.RandomSnow(snow_point_lower=0.1, snow_point_upper=0.3),
-                    A.RandomRain(rain_type="drizzle", drop_width=1, blur_value=1),
-                ],
-            ),
+
+            # A.RandomBrightnessContrast(brightness_limit=(-0.2, -0.2), contrast_limit=(-0.2, 0.2)),
+            # gaussian_contrast(alpha=(0.4, 2.0), sigma=(0.2, 1.0), max_value=1),
+            # A.OneOf(
+            #     [
+            #         A.RandomFog(fog_coef_lower=0.1, fog_coef_upper=0.3, alpha_coef=0.08),
+            #         # A.RandomSnow(snow_point_lower=0.1, snow_point_upper=0.3),
+            #         A.RandomRain(rain_type="drizzle", drop_width=1, blur_value=1),
+            #     ],
+            # ),
             A.OneOf(
                 [
                     Dropout(dropout_prob=0.05),

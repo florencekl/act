@@ -31,10 +31,10 @@ class ACTPolicy(nn.Module):
         # Apply generalized min-max normalization for each sample in the batch
 
         # print(image.shape, torch.min(image), torch.max(image))
-        eps = 1e-8  # small constant to avoid division by zero
-        image_min = image.amin(dim=(1, 2, 3), keepdim=True)
-        image_max = image.amax(dim=(1, 2, 3), keepdim=True)
-        image = (image - image_min) / (image_max - image_min + eps)
+        # eps = 1e-8  # small constant to avoid division by zero
+        # image_min = image.amin(dim=(1, 2, 3), keepdim=True)
+        # image_max = image.amax(dim=(1, 2, 3), keepdim=True)
+        # image = (image - image_min) / (image_max - image_min + eps)
         # print(image.shape, torch.min(image), torch.max(image))
 
         image = normalize(image)

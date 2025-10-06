@@ -26,9 +26,9 @@ def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256
     # img = results["img"]
     
     # Resize image if it doesn't match target size
-    if target_size is not None and img.shape[:2] != target_size:
-        pil_img = Image.fromarray(img)
-        img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+    # if target_size is not None and img.shape[:2] != target_size:
+    #     pil_img = Image.fromarray(img)
+    #     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
     
     # # Convert to 3-channel if needed (for normal backbone)
     if len(img.shape) == 2 or img.shape[2] == 1:
@@ -83,8 +83,10 @@ def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256
     # print(np.shape(augmented_img), np.min(augmented_img), np.max(augmented_img))
     
     augmented_img = augmented_img[:,:,0]
+    # do i like this or not?
+    augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
 
-    augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
+    # augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
     # results["img"] = augmented_img
     return augmented_img
 
@@ -100,9 +102,9 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
     # img = results["img"]
     
     # Resize image if it doesn't match target size
-    if target_size is not None and img.shape[:2] != target_size:
-        pil_img = Image.fromarray(img)
-        img = np.array(pil_img.resize(target_size, Image.BILINEAR))
+    # if target_size is not None and img.shape[:2] != target_size:
+    #     pil_img = Image.fromarray(img)
+    #     img = np.array(pil_img.resize(target_size, Image.BILINEAR))
     
     # # Convert to 3-channel if needed (for normal backbone)
     if len(img.shape) == 2 or img.shape[2] == 1:
@@ -119,7 +121,7 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
                 p=0.9,
             ),
             A.InvertImg(p=0.5),
-            A.CLAHE(clip_limit=(4, 6), tile_grid_size=(8, 12), p=0.3),
+            # A.CLAHE(clip_limit=(4, 6), tile_grid_size=(8, 12), p=0.3),
         ],
         # **kwargs,
     )
@@ -133,8 +135,10 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
         augmented_img = augmented_img[..., [1, 2, 0]]
 
     augmented_img = augmented_img[:,:,0]
+    # do i like this or not?
+    augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
 
-    augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
+    # augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
     # results["img"] = augmented_img
     return augmented_img
 
@@ -184,6 +188,11 @@ def build_replay_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] 
         augs = transforms._restore_for_replay(replay, lambda_transforms=lambda_transforms)
         data = augs(force_apply=True, image=img)
         augmented_image = data["image"]
+
+    augmented_img = augmented_img[:,:,0]
+    augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
+
+    augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
 
     # results["img"] = augmented_img
     return augmented_image, replay, lambda_transforms

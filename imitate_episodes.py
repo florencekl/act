@@ -125,13 +125,14 @@ def main(args):
         'action_dim': action_dim,
         'resume_from_checkpoint': args.get('resume_from_checkpoint', None),
         'warmup_epochs': args.get('warmup_epochs', 100),
-        'lr_decay_type': args.get('lr_decay_type', 'cosine')
+        'lr_decay_type': args.get('lr_decay_type', 'cosine'),
+        'pretrained_backbone_path': args.get('pretrained_backbone_path', None)
     }
 
     if is_eval:
         ckpt_names = [f'policy_best.ckpt']
         # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_500_seed_0.ckpt']
+        # ckpt_names = [f'policy_epoch_1400_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -272,6 +273,97 @@ def make_policy(policy_class, policy_config):
     return policy
 
 
+def load_pretrained_backbone_weights(policy, pretrained_path, camera_names):
+    """
+    Load pretrained backbone weights from another ACT model.
+    
+    Args:
+        policy: Current ACT policy with separate backbones
+        pretrained_path: Path to pretrained ACT model checkpoint
+        camera_names: List of camera names for mapping
+    """
+    print(f"\n=== Loading Pretrained Backbone Weights ===")
+    print(f"Source: {pretrained_path}")
+    print(f"Target cameras: {camera_names}")
+    
+    # Load pretrained checkpoint
+    checkpoint = torch.load(pretrained_path, map_location='cpu')
+    
+    # Handle different checkpoint formats
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        pretrained_state_dict = checkpoint['model_state_dict']
+        print(f"Loaded checkpoint from epoch: {checkpoint.get('epoch', 'unknown')}")
+    else:
+        pretrained_state_dict = checkpoint
+        print("Loaded model weights directly")
+    
+    # Find backbone-related keys in pretrained model
+    backbone_keys = [k for k in pretrained_state_dict.keys() if 'backbone' in k]
+    print(f"\nFound {len(backbone_keys)} backbone-related parameters in pretrained model:")
+    
+    # Group by backbone index
+    backbone_groups = {}
+    for key in backbone_keys:
+        # Extract backbone index (e.g., "backbones.0.layer1.weight" -> 0)
+        parts = key.split('.')
+        if len(parts) >= 2 and parts[0] == 'backbones':
+            backbone_idx = int(parts[1])
+            if backbone_idx not in backbone_groups:
+                backbone_groups[backbone_idx] = []
+            backbone_groups[backbone_idx].append(key)
+    
+    for idx, keys in backbone_groups.items():
+        cam_name = camera_names[idx] if idx < len(camera_names) else f"camera_{idx}"
+        print(f"  Backbone {idx} ({cam_name}): {len(keys)} parameters")
+        if len(keys) <= 5:  # Show first few parameter names if not too many
+            for key in keys[:3]:
+                print(f"    - {key}")
+            if len(keys) > 3:
+                print(f"    - ... and {len(keys)-3} more")
+    
+    # Load weights into current model
+    current_state_dict = policy.state_dict()
+    loaded_count = 0
+    skipped_count = 0
+    
+    print(f"\nLoading weights into current model:")
+    
+    for backbone_idx in range(len(camera_names)):
+        cam_name = camera_names[backbone_idx]
+        
+        if backbone_idx in backbone_groups:
+            # Load weights for this backbone
+            backbone_loaded = 0
+            backbone_skipped = 0
+            
+            for pretrained_key in backbone_groups[backbone_idx]:
+                if pretrained_key in current_state_dict:
+                    # Check shape compatibility
+                    if current_state_dict[pretrained_key].shape == pretrained_state_dict[pretrained_key].shape:
+                        current_state_dict[pretrained_key] = pretrained_state_dict[pretrained_key]
+                        backbone_loaded += 1
+                        loaded_count += 1
+                    else:
+                        print(f"    Shape mismatch for {pretrained_key}: {current_state_dict[pretrained_key].shape} vs {pretrained_state_dict[pretrained_key].shape}")
+                        backbone_skipped += 1
+                        skipped_count += 1
+                else:
+                    backbone_skipped += 1
+                    skipped_count += 1
+            
+            print(f"  Backbone {backbone_idx} ({cam_name}): loaded {backbone_loaded}, skipped {backbone_skipped}")
+        else:
+            print(f"  Backbone {backbone_idx} ({cam_name}): no pretrained weights found")
+    
+    # Load the updated state dict
+    policy.load_state_dict(current_state_dict)
+    
+    print(f"\n=== Summary ===")
+    print(f"Total parameters loaded: {loaded_count}")
+    print(f"Total parameters skipped: {skipped_count}")
+    print(f"Loading completed successfully!\n")
+
+
 def make_optimizer(policy_class, policy):
     if policy_class == 'ACT':
         optimizer = policy.configure_optimizers()
@@ -352,7 +444,60 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     # TODO this randomization is not working right now
     env.randomize_background(annotation.startpoint_in_world)
 
+    annotation_original = episode.annotation_path
+    annotation_opposite = annotation_original.replace("_L.fcsv", "_R.fcsv") if "_L.fcsv" in annotation_original else annotation_original.replace("_R.fcsv", "_L.fcsv")
+
+    with open(annotation_original) as f:
+        positions = []
+        for line in f:
+            if line.startswith("#") or line.strip() == "":
+                continue
+            parts = line.strip().split(",")
+            x, y, z = map(float, parts[1:4])
+            # if cfg.paths.convert_to_RAS:
+            positions.append([x * -1, y  * -1, z])
+            # else:
+            # positions.append([x, y, z])
+        line_annotation_original = LineAnnotation(
+                startpoint=geo.point(positions[0]),
+                endpoint=geo.point(positions[1]), 
+                volume=ct,
+                world_from_anatomical=ct.world_from_anatomical,
+                anatomical_coordinate_system=ct.anatomical_coordinate_system
+                )
+    with open(annotation_opposite) as f:
+        positions = []
+        for line in f:
+            if line.startswith("#") or line.strip() == "":
+                continue
+            parts = line.strip().split(",")
+            x, y, z = map(float, parts[1:4])
+            # if cfg.paths.convert_to_RAS:
+            positions.append([x * -1, y  * -1, z])
+            # else:
+            # positions.append([x, y, z])
+        line_annotation_opposite = LineAnnotation(
+                startpoint=geo.point(positions[0]),
+                endpoint=geo.point(positions[1]), 
+                volume=ct,
+                world_from_anatomical=ct.world_from_anatomical,
+                anatomical_coordinate_system=ct.anatomical_coordinate_system
+                )
+
+    vec = line_annotation_original.direction_in_world + line_annotation_opposite.direction_in_world
+
+    end1 = line_annotation_original.startpoint_in_world.lerp(line_annotation_original.endpoint_in_world, cfg.simulation.start_progress)
+    end2 = line_annotation_opposite.startpoint_in_world.lerp(line_annotation_opposite.endpoint_in_world, cfg.simulation.start_progress)
+
+    point = np.array(end1)[:3] + np.array(end2)[:3]
+    direction_vector = vec / vec.norm()
+    normalized_direction = direction_vector
+    mid_point = point / 2
+
     # Generate camera views
+    # print(episode.ap_direction)
+    # print(episode.lateral_direction)
+    # print(episode.ct_offset)
     ap_view, lateral_view = env.generate_views(
         annotation,
         ap_direction=geo.Vector3D(episode.ap_direction) if episode.ap_direction is not None else env.anterior_in_world,
@@ -364,7 +509,7 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
 
     # env.device.source_to_detector_distance = episode.source_to_detector_distance
 
-    return env, ct, tag, annotation, ap_view, lateral_view, rotation
+    return env, ct, tag, annotation, ap_view, lateral_view, rotation, normalized_direction, mid_point
 
 def crop_around_centroid(image: np.ndarray, centroid: tuple[int, int], bbox_size: tuple[int, int], 
                         crop_size: tuple[int, int] = None, padding_factor: float = 1.5) -> np.ndarray:
@@ -455,6 +600,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     print(policy_config)
     policy = make_policy(policy_class, policy_config)
     ckpt = torch.load(ckpt_path)
+    # print(f"epoch: {ckpt.get('epoch', 'N/A')}, val_loss: {ckpt.get('val_loss', 'N/A')}")
     if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
         loading_status = policy.load_state_dict(ckpt['model_state_dict'])
     else:
@@ -490,10 +636,10 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         #     continue
 
         if episode_previous is not None and episode_previous.case == episode_original.case and ct is not None:
-            env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original, ct=ct)
+            env, ct, tag, annotation, ap_view, lateral_view, rotation, normalized_direction, mid_point = initialize_environment_for_episode(episode_original, ct=ct)
         else:
             del ct
-            env, ct, tag, annotation, ap_view, lateral_view, rotation = initialize_environment_for_episode(episode_original)
+            env, ct, tag, annotation, ap_view, lateral_view, rotation, normalized_direction, mid_point = initialize_environment_for_episode(episode_original)
 
         # env.device.source_to_detector_distance is already set in the function
 
@@ -557,12 +703,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 #         image_dict[f"{cam_name}_cropped"] = cropped_img
                 #         image_dict[cam_name] = img
                     # image_dict[cam_name] = build_augmentation_real_xrays(img, apply=True)
-                for cam_name in config['camera_names']:
-                    if "crop" in cam_name:
-                        image = np.array(Image.fromarray(episode_original.images[cam_name][starting_timestep]).resize(target_size, Image.BILINEAR))
-                    else:
-                        image = episode_original.images[cam_name][starting_timestep]
-                    image_dict[cam_name] = np.array([image, image, image]).transpose(1, 2, 0)
+                # for cam_name in config['camera_names']:
+                #     if "crop" in cam_name:
+                #         image = np.array(Image.fromarray(episode_original.images[cam_name][starting_timestep]).resize(target_size, Image.BILINEAR))
+                #     else:
+                #         image = episode_original.images[cam_name][starting_timestep]
+                #     image_dict[cam_name] = np.array([image, image, image]).transpose(1, 2, 0)
                     # episode_original.images[cam_name][starting_timestep]
                     # image_dict[cam_name] = build_augmentation_real_xrays(image_dict[cam_name])
                     # print(np.shape(episode_original.images[cam_name]))
@@ -570,7 +716,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
 
                 # TODO get new starting qpos from the sim environment directly
-                start_position = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()
+                start_position = torch.from_numpy(episode_original.qpos[starting_timestep]).float().numpy()[:state_dim]
 
                 if rollout_id != 0:
 
@@ -586,11 +732,19 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                     start_position[:3] = offset_point.tolist()[:3]
 
+                # print(f"start position {start_position}")
+                # if rollout_id == 0:
+                start_position[:3] = mid_point[:3]
+                # start_position[3:6] = -normalized_direction[:3]
+                start_position[3:6] = -ap_view['direction'][:3]
+                # start_position[3:6] = env.anterior_in_world
+                # print(f"start position {start_position}")
+
                 # ! qvel delta positioning
-                qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()
+                qvel = torch.from_numpy(episode_original.qvel[starting_timestep]).float().numpy()[:state_dim]
                 qvel_history.append(qvel)
-                # if state_dim == 11:
-                #     pedicle_side_flag = qvel[10]
+                if state_dim == 11:
+                    pedicle_side_flag = qvel[10]
                 # print(qvel)
                 action = np.zeros_like(qvel)
 
@@ -665,25 +819,26 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             # ap_masks.append(masks["cannula"][0])
                             # ap_heatmap = (centroid_heatmap(masks[tag][0]))
 
-                            # ap_cropped.append(crop_around_centroid(ap_image, crop_center['ap_view'], crop_bbox['ap_view'], padding_factor=0.7))
+                            ap_cropped.append(crop_around_centroid(ap_image, crop_center['ap_view'], crop_bbox['ap_view'], padding_factor=0.8))
+                            # ap_cropped.append(get_cropped(ap_image, crop_center['ap_view'][1], crop_center['ap_view'][0]))
                             # Create cropped image (1/8th the size) centered on the highest value of the heatmap
-                            h, w = ap_image.shape[:2]
-                            crop_w, crop_h = w // 2, h // 2
+                            # h, w = ap_image.shape[:2]
+                            # crop_w, crop_h = w // 2, h // 2
                             
-                            # Find the position of the maximum value in the heatmap
-                            # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
-                            center_y, center_x = crop_center['ap_view']
+                            # # Find the position of the maximum value in the heatmap
+                            # # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
+                            # center_y, center_x = crop_center['ap_view']
 
-                            # Compute crop corners ensuring they are within the image bounds
-                            start_x = max(center_x - crop_w // 2, 0)
-                            start_y = max(center_y - crop_h // 2, 0)
-                            end_x = min(start_x + crop_w, w)
-                            end_y = min(start_y + crop_h, h)
+                            # # Compute crop corners ensuring they are within the image bounds
+                            # start_x = max(center_x - crop_w // 2, 0)
+                            # start_y = max(center_y - crop_h // 2, 0)
+                            # end_x = min(start_x + crop_w, w)
+                            # end_y = min(start_y + crop_h, h)
 
-                            # # ap_cropped.append(build_augmentation_real_xrays(ap_image[start_y:end_y, start_x:end_x]))
-                            ap_cropped.append(ap_image[start_y:end_y, start_x:end_x])
+                            # # # ap_cropped.append(build_augmentation_real_xrays(ap_image[start_y:end_y, start_x:end_x]))
+                            # ap_cropped.append(ap_image[start_y:end_y, start_x:end_x])
 
-                            # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
+                            # # ap_images.append(SimulationEnvironment.process_image(ap_image, masks, ("cannula", tag), neglog=False, invert=False, clahe=False))
                             ap_projection = env.device.get_camera_projection()
                             
                             # Generate lateral image  
@@ -707,24 +862,26 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
 
                             
-                            # lateral_cropped.append(crop_around_centroid(lateral_image, crop_center['lateral_view'], crop_bbox['lateral_view'], padding_factor=0.7))
+                            lateral_cropped.append(crop_around_centroid(lateral_image, crop_center['lateral_view'], crop_bbox['lateral_view'], padding_factor=0.8))
+                            # lateral_cropped.append(get_cropped(lateral_image, crop_center['lateral_view'][1], crop_center['lateral_view'][0]))
+                            
 
                             # Create cropped image (1/8th the size) centered on the highest value of the heatmap
-                            h, w = lateral_image.shape[:2]
-                            crop_w, crop_h = w // 2, h // 2
+                            # h, w = lateral_image.shape[:2]
+                            # crop_w, crop_h = w // 2, h // 2
                             
-                            # Find the position of the maximum value in the heatmap
-                            # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
-                            center_y, center_x = crop_center['lateral_view']
+                            # # Find the position of the maximum value in the heatmap
+                            # # max_idx = np.unravel_index(np.argmax(heatmap_lateral), heatmap_lateral.shape)
+                            # center_y, center_x = crop_center['lateral_view']
 
-                            # Compute crop corners ensuring they are within the image bounds
-                            start_x = max(center_x - crop_w // 2, 0)
-                            start_y = max(center_y - crop_h // 2, 0)
-                            end_x = min(start_x + crop_w, w)
-                            end_y = min(start_y + crop_h, h)
+                            # # Compute crop corners ensuring they are within the image bounds
+                            # start_x = max(center_x - crop_w // 2, 0)
+                            # start_y = max(center_y - crop_h // 2, 0)
+                            # end_x = min(start_x + crop_w, w)
+                            # end_y = min(start_y + crop_h, h)
 
-                            # # lateral_cropped.append(build_augmentation_real_xrays(lateral_image[start_y:end_y, start_x:end_x]))
-                            lateral_cropped.append(lateral_image[start_y:end_y, start_x:end_x])
+                            # # # lateral_cropped.append(build_augmentation_real_xrays(lateral_image[start_y:end_y, start_x:end_x]))
+                            # lateral_cropped.append(lateral_image[start_y:end_y, start_x:end_x])
 
                             lateral_projection = env.device.get_camera_projection()
                             
@@ -735,14 +892,15 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             image_dict['ap'] = np.array([ap_images[-1], ap_images[-1], ap_images[-1]]).transpose(1, 2, 0)
                             image_dict['lateral'] = np.array([lateral_images[-1], lateral_images[-1], lateral_images[-1]]).transpose(1, 2, 0)
 
-                            # image_dict['ap_cropped'] = build_replay_augmentation_val(ap_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
-                            # image_dict['lateral_cropped'] = build_replay_augmentation_val(lateral_cropped[-1], replay=replay, lambda_transforms=lambda_augs, apply=True)[0]
-                            # image_dict['ap_cropped'] = build_augmentation_real_xrays(ap_cropped[-1])
-                            # image_dict['lateral_cropped'] = build_augmentation_real_xrays(lateral_cropped[-1])
                             crop = np.array(Image.fromarray(ap_cropped[-1]).resize(target_size, Image.BILINEAR))
                             image_dict['ap_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
                             crop = np.array(Image.fromarray(lateral_cropped[-1]).resize(target_size, Image.BILINEAR))
                             image_dict['lateral_cropped'] = np.array([crop, crop, crop]).transpose(1, 2, 0)
+
+                            # image_dict['ap_cropped'] = build_augmentation_real_xrays(image_dict['ap_cropped'])
+                            # image_dict['lateral_cropped'] = build_augmentation_real_xrays(image_dict['lateral_cropped'])
+                            # image_dict['ap'] = build_augmentation_real_xrays(image_dict['ap'])
+                            # image_dict['lateral'] = build_augmentation_real_xrays(image_dict['lateral'])
 
                         # new axis for different cameras
                         all_cam_images = []
@@ -759,8 +917,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         image_data = image_data.float().cuda().unsqueeze(0)  # add batch dimension
                         
                         # qpos_history.append(qvel)
-                        # if state_dim == 11:
-                        #     qvel[10] = pedicle_side_flag
                         qpos = pre_process(qvel)
                         qpos = torch.from_numpy(qvel).float().cuda().unsqueeze(0)
 
@@ -790,26 +946,31 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         action = post_process(raw_action)
                         qvel_history.append(action)
 
-                        # print(state_dim)
-                        if state_dim == 11:
-                            action[7] = np.round(action[7])
-                            action[8] = np.round(action[8])
-                            action[9] = np.round(action[9])
-                            action[10] = np.round(action[10])
-                        elif state_dim == 10:
-                            action[7] = np.round(action[7])
-                            action[8] = np.round(action[8])
-                            action[9] = np.round(action[9])
+                        action[7::] = np.round(action[7::])
 
                         # ! qvel delta relative position
                         start_position = start_position + action
-                        # start_position[7::] = np.round(action[7::])
-                        qpos_history.append(start_position)
                         qvel = action
 
-                        cur_distance = np.linalg.norm(geo.point(goal_position) - geo.point(start_position[:3]))
+                        qpos_history.append(start_position)
+                        qvel_history.append(qvel)
+
+                        cur_distance = np.linalg.norm(geo.point(goal_position) - geo.point(reached_goal_position))
                         
-                        pbar.set_postfix({"distance": cur_distance})
+                        # Determine phase from first 3 one-hot flags and side from the last flag.
+                        flags_phase = action[7:10]
+                        phase_options = ['nav', 'ori', 'ins']
+                        phase_index = int(np.argmax(flags_phase))
+                        phase_str = phase_options[phase_index]
+                        
+                        if state_dim == 11:
+                            action[10] = pedicle_side_flag
+                            flag_side = action[10]
+                            side_str = 'L' if round(flag_side) == 0 else 'R'
+                        else:
+                            side_str = 'N/A'
+
+                        pbar.set_postfix({"distance": cur_distance, "phase": phase_str, "side": side_str})
 
             # Convert to numpy arrays
             # ap_images = np.array(ap_images[::5])
@@ -916,6 +1077,11 @@ def train_bc(train_dataloader, val_dataloader, config):
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
+    
+    # Load pretrained backbone weights if specified
+    if config.get('pretrained_backbone_path') is not None:
+        load_pretrained_backbone_weights(policy, config['pretrained_backbone_path'], config['camera_names'])
+    
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
     
@@ -1071,7 +1237,7 @@ def train_bc(train_dataloader, val_dataloader, config):
             
             wandb.log(log_dict, step=epoch)
 
-        if epoch % 50 == 0:
+        if epoch % 100 == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
             # Save full checkpoint with training state
             checkpoint = {
@@ -1186,5 +1352,8 @@ if __name__ == '__main__':
     parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='none', choices=['cosine', 'step', 'none'])
     parser.add_argument('--dropout', default=0.1, type=float,
                         help="Dropout applied in the transformer")
+    
+    # for loading pretrained backbone weights
+    parser.add_argument('--pretrained_backbone_path', action='store', type=str, help='path to pretrained ACT model to load backbone weights from', default=None)
     
     main(vars(parser.parse_args()))
