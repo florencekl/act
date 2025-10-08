@@ -24,7 +24,7 @@ from deepdrr_simulation_platform import EpisodeData, calculate_distances, load_c
 from deepdrr_simulation_platform.sim_environment import centroid_heatmap, centroid_with_bbox
 from deepdrr_simulation_platform._data_validation import validate_trajectory_from_points, load_and_transform_mesh, validate_trajectory
 from utils import load_data # data functions
-from utils import compute_dict_mean, set_seed, detach_dict # helper functions
+from utils import compute_dict_mean, set_seed, detach_dict, normalize_histogram # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from deepdrr.vol import Mesh
 from PIL import Image
@@ -74,8 +74,8 @@ def main(args):
     # TODO change state_dim according to task
     state_dim = action_dim
     lr_backbone = 1e-5
-    backbone = 'resnet18'
-    # backbone = 'resnet34'
+    # backbone = 'resnet18'
+    backbone = 'resnet34'
     # backbone = 'xrv_densenet121'
     if policy_class == 'ACT':
         enc_layers = 4
@@ -815,6 +815,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             # ap_image = env.histogram_matching(ap_image, xrays["ap_view"])
 
                             # ap_images.append(build_augmentation_real_xrays(ap_image))
+                            # ap_images.append(normalize_histogram(ap_image))
                             ap_images.append(ap_image)
                             # ap_masks.append(masks["cannula"][0])
                             # ap_heatmap = (centroid_heatmap(masks[tag][0]))
@@ -861,7 +862,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             # lateral_masks.append(masks["cannula"][0])
                             # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
 
-                            
+
                             lateral_cropped.append(crop_around_centroid(lateral_image, crop_center['lateral_view'], crop_bbox['lateral_view'], padding_factor=0.8))
                             # lateral_cropped.append(get_cropped(lateral_image, crop_center['lateral_view'][1], crop_center['lateral_view'][0]))
                             

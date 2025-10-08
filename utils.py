@@ -6,6 +6,7 @@ from torch.utils.data import TensorDataset, DataLoader, ConcatDataset
 from xray_transforms.xray_transforms import build_augmentation, build_augmentation_val
 from PIL import Image
 import glob
+import cv2
 
 import IPython
 import time
@@ -98,6 +99,21 @@ def resize(image, size=(256, 256)):
         image = np.array([image, image, image]).transpose(1, 2, 0) if len(image.shape) == 2 else np.repeat(image, 3, axis=2)
 
     return image
+
+def normalize_histogram(image):
+    """Apply histogram normalization using CLAHE to enhance contrast."""
+    if image.dtype != np.uint8:
+        # Convert to uint8 first
+        if np.issubdtype(image.dtype, np.floating):
+            image = (255 * (image - image.min()) / (image.ptp() + 1e-8)).astype(np.uint8)
+        else:
+            image = (image * 255 / image.max()).astype(np.uint8)
+    
+    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+    normalized = clahe.apply(image)
+    normalized = normalized.astype(np.float32) / 255.0  # Scale back to [0, 1]
+    return normalized
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, episode_files, dataset_dir, camera_names, norm_stats, augmentation_func):
@@ -197,8 +213,10 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     bbox = np.shape(root[f'/observations/images/{cam_name}_cropped'])[1:3]
                     # augmented_img = self.augmentation_func(img)
                     augmented_img = img
+                    augmented_img = normalize_histogram(augmented_img)
                     image_dict[cam_name] = resize(augmented_img)
                     cropped_img = crop_around_centroid(augmented_img, crop_center, bbox)
+                    cropped_img = normalize_histogram(cropped_img)
                     image_dict[f"{cam_name}_cropped"] = resize(cropped_img)
                 elif "lateral" == cam_name:
                     img = root[f'/observations/images/{cam_name}'][start_ts]
@@ -206,8 +224,10 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     bbox = np.shape(root[f'/observations/images/{cam_name}_cropped'])[1:3]
                     # augmented_img = self.augmentation_func(img)
                     augmented_img = img
+                    augmented_img = normalize_histogram(augmented_img)
                     image_dict[cam_name] = resize(augmented_img)
                     cropped_img = crop_around_centroid(augmented_img, crop_center, bbox)
+                    cropped_img = normalize_histogram(cropped_img)
                     image_dict[f"{cam_name}_cropped"] = resize(cropped_img)
 
                 # if "ap" == cam_name:
@@ -399,10 +419,10 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         # construct dataset and dataloader
         train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
         val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
-    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
-    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 

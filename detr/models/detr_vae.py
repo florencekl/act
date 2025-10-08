@@ -187,6 +187,7 @@ class CNNMLP(nn.Module):
         # Image observation features and position embeddings
         all_cam_features = []
         for cam_id, cam_name in enumerate(self.camera_names):
+            # features, pos = self.backbones[0](image[:, cam_id])
             features, pos = self.backbones[cam_id](image[:, cam_id])
             import torchvision.transforms as transforms
 
