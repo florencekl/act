@@ -82,9 +82,9 @@ def build_augmentation(img: np.ndarray, target_size: Tuple[int, int] = (256, 256
 
     # print(np.shape(augmented_img), np.min(augmented_img), np.max(augmented_img))
     
-    augmented_img = augmented_img[:,:,0]
+    # augmented_img = augmented_img[:,:,0]
     # do i like this or not?
-    augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
+    # augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
 
     # augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
     # results["img"] = augmented_img
@@ -121,7 +121,7 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
                 p=0.9,
             ),
             A.InvertImg(p=0.5),
-            # A.CLAHE(clip_limit=(4, 6), tile_grid_size=(8, 12), p=0.3),
+            A.CLAHE(clip_limit=(4, 6), tile_grid_size=(8, 12), p=0.3),
         ],
         # **kwargs,
     )
@@ -134,9 +134,9 @@ def build_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] = (256,
     if random.random() < 0.5:
         augmented_img = augmented_img[..., [1, 2, 0]]
 
-    augmented_img = augmented_img[:,:,0]
+    # augmented_img = augmented_img[:,:,0]
     # do i like this or not?
-    augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
+    # augmented_img = (augmented_img - np.min(augmented_img)) / (np.max(augmented_img) - np.min(augmented_img))
 
     # augmented_img = np.array([augmented_img, augmented_img, augmented_img]).transpose(1, 2, 0) if len(augmented_img.shape) == 2 else np.repeat(augmented_img, 3, axis=2)
     # results["img"] = augmented_img

@@ -5,6 +5,7 @@ import os
 import csv
 import glob
 from typing import Any, Tuple
+
 from deepdrr import LineAnnotation
 from deepdrr import geo
 import killeengeo as kg
@@ -18,6 +19,7 @@ from tqdm import tqdm
 from einops import rearrange
 import wandb
 import platform
+from datetime import datetime
 
 from deepdrr_simulation_platform._generate_comparison_gif import triangulate_point
 from deepdrr_simulation_platform import EpisodeData, calculate_distances, load_config, SimulationEnvironment
@@ -74,9 +76,8 @@ def main(args):
     # TODO change state_dim according to task
     state_dim = action_dim
     lr_backbone = 1e-5
-    # backbone = 'resnet18'
-    backbone = 'resnet34'
-    # backbone = 'xrv_densenet121'
+    # lr_backbone = args['lr'] 
+    backbone = args['backbone']
     if policy_class == 'ACT':
         enc_layers = 4
         dec_layers = 7
@@ -130,9 +131,9 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
-        # ckpt_names = [f'policy_last.ckpt']
-        # ckpt_names = [f'policy_epoch_1400_seed_0.ckpt']
+        # ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = [f'policy_last.ckpt']
+        # ckpt_names = [f'policy_epoch_1200_seed_0.ckpt']
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True, dataset_dir=test_dir)
@@ -394,8 +395,11 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     if ct is None:
         # Load phantom and tools
         if "blanca" in episode.phantoms_dir:
-            phantom_path = os.path.join(episode.phantoms_dir, episode.case, 'TORSO')
-            print(f"Loading phantom from: {phantom_path}")
+            if "verse19" in episode.phantoms_dir:
+                phantom_path = os.path.join(episode.phantoms_dir, episode.case)
+            else:
+                phantom_path = os.path.join(episode.phantoms_dir, episode.case, 'TORSO')
+            print(f"Loading phantom (blanca) from: {phantom_path}")
             ct = env.load_phantom(phantom_path, from_density=True)
         else: 
             phantom_path = os.path.join(episode.phantoms_dir, episode.case)
@@ -414,7 +418,7 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
         + "/" + cfg.paths.vertebra_subfolder \
         + "/" + os.path.split(os.path.dirname(episode.annotation_path))[-1]
 
-    mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=True, world_from_anatomical=ct.world_from_anatomical)
+    mesh = Mesh.from_stl(tag + ".stl", material="bone", tag=tag, convert_to_RAS=cfg.paths.convert_to_RAS, world_from_anatomical=ct.world_from_anatomical)
     env.tools[tag] = mesh
     env.tools[tag].enabled = False
     env.initialize_projector()
@@ -454,10 +458,10 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
                 continue
             parts = line.strip().split(",")
             x, y, z = map(float, parts[1:4])
-            # if cfg.paths.convert_to_RAS:
-            positions.append([x * -1, y  * -1, z])
-            # else:
-            # positions.append([x, y, z])
+            if cfg.paths.convert_to_RAS:
+                positions.append([x * -1, y  * -1, z])
+            else:
+                positions.append([x, y, z])
         line_annotation_original = LineAnnotation(
                 startpoint=geo.point(positions[0]),
                 endpoint=geo.point(positions[1]), 
@@ -472,10 +476,10 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
                 continue
             parts = line.strip().split(",")
             x, y, z = map(float, parts[1:4])
-            # if cfg.paths.convert_to_RAS:
-            positions.append([x * -1, y  * -1, z])
-            # else:
-            # positions.append([x, y, z])
+            if cfg.paths.convert_to_RAS:
+                positions.append([x * -1, y  * -1, z])
+            else:
+                positions.append([x, y, z])
         line_annotation_opposite = LineAnnotation(
                 startpoint=geo.point(positions[0]),
                 endpoint=geo.point(positions[1]), 
@@ -500,8 +504,10 @@ def initialize_environment_for_episode(episode: EpisodeData, ct=None) -> Tuple[S
     # print(episode.ct_offset)
     ap_view, lateral_view = env.generate_views(
         annotation,
-        ap_direction=geo.Vector3D(episode.ap_direction) if episode.ap_direction is not None else env.anterior_in_world,
-        lateral_direction=geo.Vector3D(episode.lateral_direction) if episode.lateral_direction is not None else env.right_in_world,
+        # ap_direction=geo.Vector3D(episode.ap_direction) if episode.ap_direction is not None else env.anterior_in_world,
+        ap_direction=geo.Vector3D(-direction_vector),
+        # lateral_direction=geo.Vector3D(episode.lateral_direction) if episode.lateral_direction is not None else env.right_in_world,
+        lateral_direction=geo.Vector3D(env.right_in_world),
         randomize=False
     )
     ap_view["point"] += geo.vector(list(episode.ct_offset)) if episode.ct_offset is not None else geo.vector([0,0,0])
@@ -591,7 +597,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
     policy_class = config['policy_class']
     policy_config = config['policy_config']
     max_timesteps = config['episode_len']
-    max_timesteps = int(max_timesteps * 2) # may increase for real-world tasks
+    max_timesteps = int(max_timesteps) # may increase for real-world tasks
     temporal_agg = config['temporal_agg']
 
     # load policy and stats
@@ -619,9 +625,10 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
         files = sorted(glob.glob(os.path.join(dataset_dir, '*.hdf5')))
     episode_previous = None
     ct = None
-    regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes_" + ckpt_name.replace('.ckpt','') + "_" + timestamp)
     os.makedirs(regenerated_folder, exist_ok=True)
-    csv_file = os.path.join(config['ckpt_dir'], "regenerated_episodes", "_episode_distances.csv")
+    csv_file = os.path.join(regenerated_folder, "_episode_distances.csv")
     with open(csv_file, "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["episode_number", "rollout_id", "distance"])
@@ -632,8 +639,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         episode_original = EpisodeData.from_hdf5(filename)
 
-        # if episode_original.episode <= 100:
-        #     continue
+        if episode_original.episode <= 1034:
+            continue
 
         if episode_previous is not None and episode_previous.case == episode_original.case and ct is not None:
             env, ct, tag, annotation, ap_view, lateral_view, rotation, normalized_direction, mid_point = initialize_environment_for_episode(episode_original, ct=ct)
@@ -736,8 +743,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 # if rollout_id == 0:
                 start_position[:3] = mid_point[:3]
                 # start_position[3:6] = -normalized_direction[:3]
-                start_position[3:6] = -ap_view['direction'][:3]
-                # start_position[3:6] = env.anterior_in_world
+                # start_position[3:6] = -ap_view['direction'][:3]
+                start_position[3:6] = env.anterior_in_world
                 # print(f"start position {start_position}")
 
                 # ! qvel delta positioning
@@ -745,6 +752,12 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                 qvel_history.append(qvel)
                 if state_dim == 11:
                     pedicle_side_flag = qvel[10]
+                    side_str = 'L' if round(pedicle_side_flag) == 0 else 'R'
+
+                    if side_str == 'L':
+                        start_position[:3] += np.array(env.right_in_world) * 40
+                    else:
+                        start_position[:3] -= np.array(env.right_in_world) * 40
                 # print(qvel)
                 action = np.zeros_like(qvel)
 
@@ -763,13 +776,13 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                     env.tools.get(tag).enabled = False
                     env.projector.device.set_view(**view)
                     image = env.projector()
-                    print(np.shape(image), np.min(image), np.max(image))
+                    # print(np.shape(image), np.min(image), np.max(image))
                     image = (image - image.min()) / (image.max() - image.min() + 1e-8)
                     xrays[view_name] = image
                     env.tools.get(tag).enabled = True
                     mask = centroid_heatmap(env.projector.project_seg(tags=[tag])[0])
-                    
                     centroid, bbox_size = centroid_with_bbox(env.projector.project_seg(tags=[tag])[0])
+                    
                     max_idx =  np.unravel_index(np.argmax(mask), mask.shape)
                     centroid = max_idx
                     if 'ap' in view_name and episode_original.crop_center_ap is not None:
@@ -791,7 +804,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                         distance = start_position[6]
 
                         cannula_point = base_point + (direction * distance)
-                        linear_point = base_point + (direction * distance)
+                        linear_point = base_point + (0 * distance)
 
                         cannula_point_direction = geo.point(cannula_point) + geo.vector(direction).hat() * 10
                         linear_point_direction = geo.point(linear_point) + geo.vector(direction).hat() * 10
@@ -805,6 +818,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                                     "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
                                     "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                                     tag: (None, None, False),
+                                    "pointer": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                                 },
                                 view=ap_view,
                                 rotation=rotation,
@@ -820,6 +834,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             # ap_masks.append(masks["cannula"][0])
                             # ap_heatmap = (centroid_heatmap(masks[tag][0]))
 
+                            # ap_cropped.append(crop_around_centroid(ap_image, crop_center['ap_view'], crop_bbox['ap_view'], padding_factor=0.8))
+                            # ap_cropped.append(normalize_histogram(crop_around_centroid(ap_image, crop_center['ap_view'], crop_bbox['ap_view'], padding_factor=0.8)))
                             ap_cropped.append(crop_around_centroid(ap_image, crop_center['ap_view'], crop_bbox['ap_view'], padding_factor=0.8))
                             # ap_cropped.append(get_cropped(ap_image, crop_center['ap_view'][1], crop_center['ap_view'][0]))
                             # Create cropped image (1/8th the size) centered on the highest value of the heatmap
@@ -848,6 +864,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                                     "cannula": (geo.point(cannula_point), geo.vector(cannula_point_direction), True),
                                     "linear_drive": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                                     tag: (None, None, False),
+                                    "pointer": (geo.point(linear_point), geo.vector(linear_point_direction), False),
                                 },
                                 view=lateral_view,
                                 rotation=rotation,
@@ -858,11 +875,14 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
                             # lateral_image = env.histogram_matching(lateral_image, xrays["lateral_view"])
 
                             # lateral_images.append(build_augmentation_real_xrays(lateral_image))
+
+                            # lateral_images.append(normalize_histogram(lateral_image))
                             lateral_images.append(lateral_image)
                             # lateral_masks.append(masks["cannula"][0])
                             # lateral_heatmap = (centroid_heatmap(masks[tag][0]))
 
 
+                            # lateral_cropped.append(normalize_histogram(crop_around_centroid(lateral_image, crop_center['lateral_view'], crop_bbox['lateral_view'], padding_factor=0.8)))
                             lateral_cropped.append(crop_around_centroid(lateral_image, crop_center['lateral_view'], crop_bbox['lateral_view'], padding_factor=0.8))
                             # lateral_cropped.append(get_cropped(lateral_image, crop_center['lateral_view'][1], crop_center['lateral_view'][0]))
                             
@@ -958,6 +978,8 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
                         cur_distance = np.linalg.norm(geo.point(goal_position) - geo.point(reached_goal_position))
                         
+                        # action[7:10] = [0, 1, 0]
+                        
                         # Determine phase from first 3 one-hot flags and side from the last flag.
                         flags_phase = action[7:10]
                         phase_options = ['nav', 'ori', 'ins']
@@ -1030,7 +1052,7 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
             evaluation_distance = np.linalg.norm(geo.point(goal_position) - geo.point(reached_goal_position))
 
             evaluation_distance_list.append(evaluation_distance)
-            csv_file = os.path.join(config['ckpt_dir'], "regenerated_episodes", "_episode_distances.csv")
+            csv_file = os.path.join(regenerated_folder, "_episode_distances.csv")
             with open(csv_file, "a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([episode_original.episode, rollout_id, evaluation_distance])
@@ -1046,7 +1068,6 @@ def eval_bc(config, ckpt_name, save_episode=True, dataset_dir=None):
 
         print(f"Timestamp: {datetime.now()} Distances: {evaluation_distance_list} argmin: {np.argmin(evaluation_distance_list)} -> distance {evaluation_distance_list[np.argmin(evaluation_distance_list)]}")
 
-        regenerated_folder = os.path.join(config['ckpt_dir'], "regenerated_episodes")
         os.makedirs(regenerated_folder, exist_ok=True)
         env.save_episode(regenerated_episodes[np.argmin(evaluation_distance_list)], regenerated_folder, f"{episode_original.episode:04d}")
 
@@ -1188,15 +1209,15 @@ def train_bc(train_dataloader, val_dataloader, config):
         policy.train()
         optimizer.zero_grad()
         # for start_ts in range(0, config['episode_len'], policy_config['num_queries']):
-        #         train_dataloader.dataset.start_ts = start_ts + np.random.choice(config['episode_len'])
-        #         for batch_idx, data in enumerate(train_dataloader):
-        #             forward_dict = forward_pass(data, policy)
-        #             # backward
-        #             loss = forward_dict['loss']
-        #             loss.backward()
-        #             optimizer.step()
-        #             optimizer.zero_grad()
-        #             train_history.append(detach_dict(forward_dict))
+        #     train_dataloader.dataset.start_ts = start_ts + np.random.choice(policy_config['num_queries'])
+        #     for batch_idx, data in enumerate(train_dataloader):
+        #         forward_dict = forward_pass(data, policy)
+        #         # backward
+        #         loss = forward_dict['loss']
+        #         loss.backward()
+        #         optimizer.step()
+        #         optimizer.zero_grad()
+        #         train_history.append(detach_dict(forward_dict))
 
         for batch_idx, data in enumerate(train_dataloader):
             forward_dict = forward_pass(data, policy)
@@ -1339,6 +1360,9 @@ if __name__ == '__main__':
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=True)
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=True)
     parser.add_argument('--temporal_agg', action='store_true')
+    parser.add_argument('--backbone', action='store', type=str, help='Backbone architecture', 
+                        default='resnet18', 
+                        choices=['resnet18', 'resnet34', 'resnet50', 'efficientnet_b0', 'efficientnet_b3', 'xrv_densenet121'])
     
     # for wandb logging
     parser.add_argument('--use_wandb', action='store', help='Enable wandb logging', required=False, default=True, type=bool)

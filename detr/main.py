@@ -69,6 +69,10 @@ def get_args_parser():
     parser.add_argument('--action_dim', action='store', type=int, help='Action Dimension', required=False)
     parser.add_argument('--warmup_epochs', action='store', type=int, help='number of epochs for learning rate warmup', default=250, required=False)
     parser.add_argument('--lr_decay_type', action='store', type=str, help='learning rate decay type: cosine, step, or none', default='cosine', choices=['cosine', 'step', 'none'], required=False)
+
+    # parser.add_argument('--backbone', action='store', type=str, help='Backbone architecture', 
+    #                     default='resnet18', 
+    #                     choices=['resnet18', 'resnet34', 'resnet50', 'efficientnet_b0', 'efficientnet_b3', 'xrv_densenet121'])
     
     return parser
 
