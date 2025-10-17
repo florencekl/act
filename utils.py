@@ -90,7 +90,10 @@ def crop_around_centroid(image: np.ndarray, centroid: tuple[int, int], bbox_size
     return image[start_y:end_y, start_x:end_x]
 
 def resize(image, size=(256, 256)):
-    if image.shape[:2] != size:
+    if len(image.shape) == 3 and image.shape[2] > 3 and image.shape[:2] != size:
+        pil_img = Image.fromarray(image, mode="RGB")
+        image = np.array(pil_img.resize(size, Image.BILINEAR))
+    elif image.shape[:2] != size:
         pil_img = Image.fromarray(image)
         image = np.array(pil_img.resize(size, Image.BILINEAR))
     
@@ -196,6 +199,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
             else:
                 start_ts_list = [self.start_ts]
 
+        # start_ts_list = [0]
+
         ret_image_data = []
         ret_qpos_data = []
         ret_action_data = []
@@ -213,7 +218,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     bbox = np.shape(root[f'/observations/images/{cam_name}_cropped'])[1:3]
                     # augmented_img = self.augmentation_func(img)
                     augmented_img = img
-                    augmented_img = normalize_histogram(augmented_img)
+                    # augmented_img = normalize_histogram(augmented_img)
                     image_dict[cam_name] = resize(augmented_img)
                     cropped_img = crop_around_centroid(augmented_img, crop_center, bbox)
                     # cropped_img = normalize_histogram(cropped_img)
@@ -224,7 +229,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     bbox = np.shape(root[f'/observations/images/{cam_name}_cropped'])[1:3]
                     # augmented_img = self.augmentation_func(img)
                     augmented_img = img
-                    augmented_img = normalize_histogram(augmented_img)
+                    # augmented_img = normalize_histogram(augmented_img)
                     image_dict[cam_name] = resize(augmented_img)
                     cropped_img = crop_around_centroid(augmented_img, crop_center, bbox)
                     # cropped_img = normalize_histogram(cropped_img)
@@ -419,10 +424,10 @@ def load_data(dataset_dir, num_episodes, episodes_start, camera_names, batch_siz
         # construct dataset and dataloader
         train_dataset = EpisodicDataset(train_files, dataset_dir, camera_names, norm_stats)
         val_dataset = EpisodicDataset(val_files, dataset_dir, camera_names, norm_stats)
-    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
-    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=4, prefetch_factor=2, persistent_workers=True)
+    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
+    # val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=12, prefetch_factor=4, persistent_workers=True)
 
     return train_dataloader, val_dataloader, norm_stats, train_dataset.is_sim
 

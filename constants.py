@@ -328,6 +328,36 @@ SIM_TASK_CONFIGS = {
         'val_dir': ALT_DATA_DIR + '/verse19/VAL',
         'test_dir': ALT_DATA_DIR + '/verse19/TEST',
     },
+    'overfit_single_ct': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT',
+    },
+    'overfit_single_ct_left': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only',
+    },
+    'overfit_single_ct_left_T9_T12': {
+        'dataset_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only_T9-T12',
+        'episode_start': 0,
+        'num_episodes': 1.0,
+        'episode_len': 200,
+        'camera_names': ['ap', 'lateral', 'ap_cropped', 'lateral_cropped'],
+        'train_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only_T9-T12',
+        'val_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only_T9-T12',
+        'test_dir': ALT_DATA_DIR + '/NMDID_subset_single_CT/left_only_T9-T12',
+    },
 }
 
 ### Simulation envs fixed constants

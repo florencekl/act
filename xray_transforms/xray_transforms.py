@@ -210,9 +210,9 @@ def build_replay_augmentation_val(img: np.ndarray, target_size: Tuple[int, int] 
     transforms =  A.ReplayCompose(
         [
             # neglog(),
-            A.InvertImg(always_apply=True),
+            # A.InvertImg(always_apply=True),
             mixture_window(keep_original=True, model="kmeans"),
-            A.InvertImg(p=0.5),
+            # A.InvertImg(p=0.5),
             clahe(p=0.3),
         ],
     )
@@ -277,7 +277,7 @@ def build_augmentation_real_xrays(img: np.ndarray, target_size: Tuple[int, int] 
             neglog_lin_interp(),
             A.MedianBlur(blur_limit=5),
             mixture_window(keep_original=True, model="kmeans"),
-            # clahe(p=0.3),
+            clahe(p=0.3),
         ],
         # **kwargs,
     )

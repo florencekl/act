@@ -143,12 +143,12 @@ class Backbone(BackboneBase):
         if "resnet" in name:
             backbone = getattr(torchvision.models, name)(
                 replace_stride_with_dilation=[False, False, dilation],
-                weights=weights,
+                # weights=weights,
                 norm_layer=FrozenBatchNorm2d,
             )  # pretrained
         else:  # efficientnet
             backbone = getattr(torchvision.models, name)(
-                weights=weights, norm_layer=FrozenBatchNorm2d
+                # weights=weights, norm_layer=FrozenBatchNorm2d
             )  # pretrained
         super().__init__(
             name, backbone, train_backbone, num_channels, return_interm_layers

@@ -73,6 +73,9 @@ def get_args_parser():
     # parser.add_argument('--backbone', action='store', type=str, help='Backbone architecture', 
     #                     default='resnet18', 
     #                     choices=['resnet18', 'resnet34', 'resnet50', 'efficientnet_b0', 'efficientnet_b3', 'xrv_densenet121'])
+
+    # for loading pretrained backbone weights
+    parser.add_argument('--pretrained_backbone_path', action='store', type=str, help='path to pretrained ACT model to load backbone weights from', default=None)
     
     return parser
 
